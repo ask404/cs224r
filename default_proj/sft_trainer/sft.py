@@ -85,7 +85,6 @@ def train(
     # 4) Periodically evaluate on `test_dataloader` and log metrics to W&B.
     # 5) Save checkpoints under `output_dir` when requested.
 
-
     global_step = 0
     num_batches = len(train_dataloader)
 
@@ -95,6 +94,9 @@ def train(
 
         epoch_loss = 0.0
         epoch_tokens = 0.0
+
+        train_correct_tokens = 0.0
+        train_total_tokens = 0.0
 
         progress_bar = tqdm.tqdm(train_dataloader, desc=f"Epoch {epoch + 1}/{num_epochs}", leave=True)
 
@@ -108,17 +110,24 @@ def train(
             logits = out.logits  # [batch size, number of tokens, vocabulary size]
 
             # 2) Mask loss to response tokens only using `is_response_token`.
-            # Reviewed: https://sebastianraschka.com/faq/docs/next-token-prediction.html
+            # Reference: https://sebastianraschka.com/faq/docs/next-token-prediction.html
             shift_logits = logits[:, :-1, :] # Prediction for next tokens.
             shift_labels = input_ids[:, 1:] # Next tokens targets.
             shift_mask = response_token[:, 1:].float() # Align 'is_response_token' with shift_labels.
+
+            num_tokens = shift_mask.sum()
+
+            # Required to log Token Accuracy on Train.
+            pred_tokens = shift_logits.argmax(dim=-1) # Choose max token number from vocabulary.
+            correct_tokens = ((pred_tokens == shift_labels)*shift_mask).sum()
+            train_correct_tokens += correct_tokens.detach().item()
+            train_total_tokens += num_tokens.detach().item()
 
             log_probs = F.log_softmax(shift_logits, dim=-1)
             tokens_logp = log_probs.gather(-1, shift_labels.unsqueeze(-1)).squeeze(-1)  # [batch size, num. tokens - 1]
 
             tokens_losses = -(tokens_logp * shift_mask)
             loss_sum = tokens_losses.sum()
-            num_tokens = shift_mask.sum()
             batch_loss = loss_sum / num_tokens.clamp_min(1.0)
 
             epoch_loss += loss_sum.detach().item()
@@ -141,8 +150,12 @@ def train(
                 avg_loss = epoch_loss / max(epoch_tokens, 1.0)
                 lr = scheduler.get_last_lr()[0]
 
+                train_acc = train_correct_tokens / max(train_total_tokens, 1.0)
+
                 wandb.log({
-                    "train/loss": batch_loss.item(),
+                    "train/loss": avg_loss,
+                    "train/batch_loss": batch_loss.item(),
+                    "train/token_accuracy": train_acc,
                     "train/lr": lr,
                     "train/epoch": epoch + 1,
                 }, step=global_step)
@@ -153,6 +166,7 @@ def train(
         model.eval()
         test_loss = 0.0
         test_tokens = 0.0
+        test_correct_tokens = 0.0
 
         with torch.no_grad():
             for batch in tqdm.tqdm(test_dataloader, desc="Evaluating", leave=True):
@@ -165,6 +179,11 @@ def train(
                 shift_labels = input_ids[:, 1:]
                 shift_mask = response_token[:, 1:].float()
 
+                # Required to log Token Accuracy on Test.
+                pred_tokens = shift_logits.argmax(dim=-1)  # Choose max token number from vocabulary.
+                correct_tokens = ((pred_tokens == shift_labels) * shift_mask).sum()
+                test_correct_tokens += correct_tokens.detach().item()
+
                 log_probs = F.log_softmax(shift_logits, dim=-1)
                 tokens_logp = log_probs.gather(-1, shift_labels.unsqueeze(-1)).squeeze(-1)
 
@@ -172,10 +191,16 @@ def train(
                 test_tokens += shift_mask.sum().item()
 
         train_avg = epoch_loss / max(epoch_tokens, 1.0)
-        eval_avg = test_loss / max(test_tokens, 1.0)
+        test_avg = test_loss / max(test_tokens, 1.0)
+        test_acc = test_correct_tokens / max(test_tokens, 1.0)
 
-        wandb.log({"eval/loss": eval_avg, "eval/epoch": epoch + 1}, step=global_step)
-        print(f"Epoch {epoch + 1}/{num_epochs} | train_loss={train_avg:.4f} | eval_loss={eval_avg:.4f}")
+        wandb.log({
+            "eval/loss": test_avg,
+            "eval/token_accuracy": test_acc,
+            "eval/epoch": epoch + 1,
+        }, step=global_step)
+
+        print(f"Epoch {epoch + 1}/{num_epochs} | train_loss={train_avg:.4f} | eval_loss={test_avg:.4f}")
 
         clear_cache(model)
 
