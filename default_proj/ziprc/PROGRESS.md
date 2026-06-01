@@ -29,21 +29,34 @@ A six-stage Modal pipeline, all validated:
 The live decoder's per-step readout matches the offline scorer (0.906 vs 0.910),
 confirming the zero-overhead introspection works *during* generation.
 
-**2. Adaptive compute works (headline).** Cost–accuracy Pareto (cost = active forward
-passes; oracle@8 = 0.825 ceiling):
+**2. Adaptive compute works (headline).** The head's introspection drives three test-time
+strategies, each winning a different regime (held-out, K=8; oracle@8 ≈ 0.81):
+
+*Compute-bound* — `prune` / utility (β sweep), cost = active forward passes:
 
 | config | acc | cost | vs none |
 |---|---|---|---|
-| none (full BoN) | 0.700 | 4072 | — |
-| util β=0.005 | 0.700 | 3084 | −24% |
-| util β=0.01 | 0.675 | 2429 | −40% |
-| util β=0.02 | 0.650 | 1703 | −58% |
-| util β=0.05 | 0.600 | 1152 | −72% |
-| **prune** | **0.700** | **1250** | **−69%** |
+| none (full BoN) | 0.708 | 4141 | — |
+| util β=0.01 | 0.688 | 2343 | −43% |
+| util β=0.05 | 0.625 | 1160 | −72% |
+| **prune** | **0.708** | **1266** | **−69%** |
 
-The ZIP head enables ~69% compute reduction at **zero accuracy loss**. The β-sweep gives
-a smooth tunable frontier; notably the simple absolute-threshold **prune dominates** the
-redundancy-aware utility policy on this task.
+*Latency-bound* — `earlystop` (τ sweep), cost = decode steps (wall-clock proxy):
+
+| config | acc | latency | vs none |
+|---|---|---|---|
+| none | 0.708 | 688 | — |
+| **estop τ=0.8** | **0.729** | **384** | **−44%** |
+| estop τ=0.9 | 0.729 | 440 | −36% |
+
+`prune` cuts ~69% of compute and `earlystop` ~44% of latency, both at **zero accuracy
+loss** — and the winning policy flips with the objective (the paper's α axis). The simple
+absolute-threshold `prune` dominates the redundancy-aware utility policy on this task.
+
+**2b. Adaptive-K allocation.** Using the head's per-prompt difficulty signal (`value_first`,
+AUC 0.85) to spend more samples on predicted-hard prompts beats fixed-K at matched average
+budget by a small but consistent margin (+0.6–1.8 oracle points across mean-K 2–6), limited
+by Countdown's narrow difficulty spread.
 
 **3. Selection ≈ majority (honest scoping).** Value-based *selection* does not beat
 majority voting on Countdown (value@8 = 0.74 vs majority@8 = 0.78 = oracle). The
@@ -74,6 +87,7 @@ for the full structured/held-out pipeline. Figures: `ziprc_results/figures/`.
 
 ## Possible next steps
 
-Stage C (branching + latency-bound α for the latency-vs-compute axis); intermediate-capability
-checkpoints to test whether a balanced 3-class regime exists; the structured failure-mode
-signal may be more useful to the curriculum half than to inference.
+A larger run (512-prompt head, 256 held-out) to tighten the numbers; true mid-generation
+branching (needs per-sample KV caches; likely marginal on short Countdown sequences);
+intermediate-capability checkpoints to test whether a balanced 3-class regime exists; the
+structured failure-mode signal may be more useful to the curriculum half than to inference.
