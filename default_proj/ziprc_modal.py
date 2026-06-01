@@ -137,6 +137,14 @@ def run_figures(a): return _run("ziprc/make_figures.py", a)
 def run_adaptive_k(a): return _run("ziprc/adaptive_k.py", a)
 
 
+@_cpu_fn
+def run_aggregate(a): return _run("ziprc/aggregate_pareto.py", a)
+
+
+@_gpu_fn
+def run_calib_tv(a): return _run("ziprc/calibration_tv.py", a)
+
+
 # Long-running multi-stage pipeline that runs ENTIRELY in one remote container, so the
 # sequence survives the local client disconnecting (e.g. laptop sleep). Launch with
 # `modal run --detach`. Each step commits the volume, so partial progress is preserved.
@@ -147,6 +155,8 @@ PIPELINE_TIMEOUT = int(os.environ.get("ZIPRC_PIPELINE_TIMEOUT", "21600"))  # 6h
               startup_timeout=STARTUP_TIMEOUT_SECONDS,
               volumes={str(REMOTE_VOLUME_ROOT): TRAINING_VOLUME}, secrets=_secrets())
 def run_pipeline(steps_json: str) -> str:
+    # CONTINUE-ON-FAILURE: a failed step (e.g. a new/risky script) is logged but does NOT
+    # abort the run, so validated high-value steps still complete unattended.
     steps = json.loads(steps_json)
     log = []
     for i, (script, sargs) in enumerate(steps):
@@ -156,14 +166,14 @@ def run_pipeline(steps_json: str) -> str:
             log.append(f"OK   step {i + 1} {script}")
         except Exception as e:
             log.append(f"FAIL step {i + 1} {script}: {e}")
-            print(f"[pipeline] STOPPING at step {i + 1}: {e}", flush=True)
-            break
+            print(f"[pipeline] step {i + 1} FAILED (continuing): {e}", flush=True)
     print("\n[pipeline] SUMMARY:\n" + "\n".join(log), flush=True)
     return "\n".join(log)
 
 
 _POLICY = ("/vol/checkpoints/rloo_checkpoints/rloo_training/"
            "rloo_from_sft_gs16_bs64_lr1e5_clip1_iwclip_20260524_101017/latest_checkpoint/model")
+_SFT = "asingh15/qwen-sft-countdown-defaultproj"
 _DS = "asingh15/countdown_tasks_3to4"
 
 
@@ -197,6 +207,49 @@ def _build_pipeline(name: str):
             ["ziprc/make_figures.py", ["--scored", f"{D}/test_scored_256.parquet",
                                        "--pareto", f"{D}/pareto_summary_256.json", "--out-dir", "/vol/ziprc/figures_256"]],
         ]
+    if name == "scaleup_plus":
+        H = f"{M}/lite_binary_512"           # the scaled head (trained below)
+        dec = lambda seed, out: ["ziprc/adaptive_decode.py", [
+            "--model", H, "--dataset", _DS, "--split", "test", "--num-prompts", "40", "--K", "8",
+            "--reward-values", "0.0", "1.0", "--warmup", "96", "--prune-interval", "32", "--keep-min", "1",
+            "--betas", "0.02", "--stop-thresholds", "0.8", "--seed", str(seed), "--pareto-out", out]]
+        return [
+            # --- scaleup core (all validated code) ---
+            ["ziprc/gen_rollouts.py", ["--model", _POLICY, "--dataset", _DS, "--split", "train",
+                                       "--out", f"{D}/train_rollouts_512.parquet", "--max-num-prompts", "512", "--samples-per-prompt", "4"]],
+            ["ziprc/label_rollouts.py", ["--in-parquet", f"{D}/train_rollouts_512.parquet", "--out-parquet", f"{D}/train_labeled_512.parquet", "--judge", "heuristic"]],
+            ["ziprc/train_head_only.py", ["--model-id", _POLICY, "--data-path", f"{D}/train_labeled_512.parquet",
+                                          "--weights-path", H, "--label-column", "correct", "--reward-values", "0.0", "1.0",
+                                          "--batch-size", "16", "--gradient-accumulation-steps", "2", "--num-epochs", "3"]],
+            ["ziprc/gen_rollouts.py", ["--model", _POLICY, "--dataset", _DS, "--split", "test",
+                                       "--out", f"{D}/test_rollouts_256.parquet", "--max-num-prompts", "256", "--samples-per-prompt", "8"]],
+            ["ziprc/label_rollouts.py", ["--in-parquet", f"{D}/test_rollouts_256.parquet", "--out-parquet", f"{D}/test_labeled_256.parquet", "--judge", "heuristic"]],
+            ["ziprc/score_joint_head.py", ["--model", H, "--in-parquet", f"{D}/test_labeled_256.parquet", "--out-parquet", f"{D}/test_scored_256.parquet", "--reward-values", "0.0", "1.0"]],
+            ["ziprc/value_select.py", ["--in-parquet", f"{D}/test_scored_256.parquet", "--ks", "1", "2", "4", "8", "16"]],
+            # --- multi-seed Pareto (validated decode x3) + error bars ---
+            dec(0, f"{D}/pareto_s0.json"), dec(1, f"{D}/pareto_s1.json"), dec(2, f"{D}/pareto_s2.json"),
+            ["ziprc/aggregate_pareto.py", ["--inputs", f"{D}/pareto_s0.json", f"{D}/pareto_s1.json", f"{D}/pareto_s2.json",
+                                           "--out-json", f"{D}/pareto_agg.json", "--out-png", "/vol/ziprc/figures_256/pareto_errorbars.png"]],
+            # --- adaptive-K (validated) ---
+            ["ziprc/adaptive_k.py", ["--scored", f"{D}/test_scored_256.parquet", "--budgets", "2", "3", "4", "5", "6",
+                                     "--kmax", "8", "--trials", "16", "--out-json", f"{D}/adaptive_k_256.json"]],
+            # --- exploratory: cross-policy transfer (validated code, mismatched head/data) ---
+            ["ziprc/score_joint_head.py", ["--model", f"{M}/lite_binary_sft", "--in-parquet", f"{D}/test_labeled.parquet",
+                                           "--out-parquet", f"{D}/cross_rloodata_sfthead.parquet", "--reward-values", "0.0", "1.0"]],
+            ["ziprc/value_select.py", ["--in-parquet", f"{D}/cross_rloodata_sfthead.parquet", "--ks", "1", "4", "8"]],
+            ["ziprc/score_joint_head.py", ["--model", H, "--in-parquet", f"{D}/sft_test_labeled.parquet",
+                                           "--out-parquet", f"{D}/cross_sftdata_rloohead.parquet", "--reward-values", "0.0", "1.0"]],
+            ["ziprc/value_select.py", ["--in-parquet", f"{D}/cross_sftdata_rloohead.parquet", "--ks", "1", "4", "8"]],
+            # --- figures (validated + extended) ---
+            ["ziprc/make_figures.py", ["--scored", f"{D}/test_scored_256.parquet", "--pareto", f"{D}/pareto_s0.json",
+                                       "--adaptive-k", f"{D}/adaptive_k_256.json", "--out-dir", "/vol/ziprc/figures_256"]],
+            # --- proposal deliverable: K=64 ground-truth TV calibration (new code, last) ---
+            ["ziprc/gen_rollouts.py", ["--model", _POLICY, "--dataset", _DS, "--split", "test",
+                                       "--out", f"{D}/k64_rollouts.parquet", "--max-num-prompts", "32", "--samples-per-prompt", "64"]],
+            ["ziprc/label_rollouts.py", ["--in-parquet", f"{D}/k64_rollouts.parquet", "--out-parquet", f"{D}/k64_labeled.parquet", "--judge", "heuristic"]],
+            ["ziprc/calibration_tv.py", ["--model", H, "--in-parquet", f"{D}/k64_labeled.parquet", "--reward-values", "0.0", "1.0",
+                                         "--min-k", "32", "--out-json", f"{D}/calib_tv.json"]],
+        ]
     raise ValueError(f"unknown pipeline: {name}")
 
 
@@ -214,11 +267,11 @@ def main(*raw):
         return
     parser = argparse.ArgumentParser()
     parser.add_argument("stage", choices=("gen", "label", "train", "score", "select",
-                                          "decode", "figures", "adaptive_k"))
+                                          "decode", "figures", "adaptive_k", "aggregate", "calib_tv"))
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     ns = parser.parse_args(raw)
     a = ns.rest[1:] if ns.rest[:1] == ["--"] else ns.rest
     fn = {"gen": run_gen, "label": run_label, "train": run_train, "score": run_score,
           "select": run_select, "decode": run_decode, "figures": run_figures,
-          "adaptive_k": run_adaptive_k}[ns.stage]
+          "adaptive_k": run_adaptive_k, "aggregate": run_aggregate, "calib_tv": run_calib_tv}[ns.stage]
     print(fn.remote(a))
