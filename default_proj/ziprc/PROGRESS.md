@@ -70,6 +70,40 @@ diversity is policy-capability-dependent: the converged RLOO policy fails almost
 above 15%. Trained on SFT (all three present), the structured head matched binary
 (AUC 0.867 vs 0.865) — the proposal's stated fallback.
 
+## Scaled & extended results (512-prompt head, multi-seed; figures in `ziprc_results/figures_scaled/`)
+
+**Scaled head.** Trained on 512 prompts, held-out calibration improves to **AUC 0.922**.
+
+**Multi-seed error bars (3 seeds).** Tight std; a more honest headline than single-seed:
+
+| config | acc | cost | latency |
+|---|---|---|---|
+| none | 0.708±0.012 | 3944±106 | 692±11 |
+| **prune** | 0.683±0.012 | **1468±16** (−63%) | 508±16 |
+| **estop τ=0.8** | **0.725±0.020** | 2306±147 | **356±12** (−48%) |
+
+`prune` trades ~2.5 acc points for −63% compute; `earlystop` gives −48% latency at +1.7 acc.
+
+**K=64 ground-truth calibration (proposal §3.4 metric) — validates against the paper:**
+
+| metric | ours (ZIP-RC-Lite) | paper's ZIP-RC-Lite |
+|---|---|---|
+| mean Total Variation | **0.52** | ~0.63 |
+| end-of-gen reward F1 | 0.81 | ~0.82 |
+| end-of-gen reward acc | 0.67 | ~0.71 |
+
+Our reward calibration matches (and beats on TV) the paper's reported ZIP-RC-Lite numbers.
+The length head is weak (E[remaining-tokens] MAE ≈ 257 tokens) — an honest limitation: the
+reward half of the joint is well-calibrated, the length half is not.
+
+**Cross-policy transfer (exploratory).** Heads transfer across policies with minimal drop —
+the RLOO-trained head scores SFT rollouts at AUC 0.865 (vs the matched SFT head's 0.867), and
+the SFT head scores RLOO rollouts at 0.890 (vs matched 0.922). **Introspection is largely
+policy-agnostic** — the head learns a transferable "will this rollout succeed" signal.
+
+**Adaptive-K** did not replicate its small gain on the scaled head (≈0, within noise) — the
+narrow `value_first` dynamic range on Countdown leaves little to reallocate.
+
 ## Engineering notes (non-obvious bugs, all caught by a validation harness)
 
 - **Tied embeddings (critical):** Qwen2.5-0.5B ties input/output embeddings, so head-only

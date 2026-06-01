@@ -59,6 +59,7 @@ def main():
     # error-bar compute Pareto (none + prune + utility)
     png = args.out_png or (args.out_json and args.out_json.replace(".json", ".png"))
     if png:
+        Path(png).parent.mkdir(parents=True, exist_ok=True)
         fig, ax = plt.subplots(figsize=(5.4, 3.6))
         for cfg, m in agg.items():
             if "cost" not in m or "acc" not in m:
