@@ -93,6 +93,15 @@ FRESH extras** on the unsolved-but-promising frontier (per-prompt variable sampl
 `gen_rollouts --n-col`), and compare to fixed-K at matched mean budget — with real generation
 and true compute accounting (not the offline pool).
 
+> **Which lever is this?** Adaptive-K is a *budget* lever (how many whole samples each prompt
+> gets, **across prompts**) — distinct from the *within-prompt* meta-actions in
+> `adaptive_decode.py`: **prune** (compute axis: kill predicted-loser samples mid-generation)
+> and **earlystop** (latency axis: commit to a confident sample, stop the rest). Here every
+> sample (probe + extras) is generated **to completion** — no token-level prune/earlystop. The
+> savings come only from spending *fewer whole samples* on solved/hopeless prompts (a
+> prompt-level analog of skip-solved + give-up). The three levers are **composable**: a full
+> system would prune *within* each sample and reallocate samples *across* prompts.
+
 | budget B | adaptive (probe + reallocate) | fixed@B | gain |
 |---|---|---|---|
 | 4 | **0.371** | 0.346 | **+0.025** |
