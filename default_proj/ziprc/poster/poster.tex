@@ -5,9 +5,10 @@
 %
 % LAYOUT: ~40% (left column) is reserved for M. Vizcarra's Frontier-Curriculum half;
 %         ~60% (middle + right columns) is A. Kim's ZIP-RC-Lite adaptive-compute half.
-% Figures: upload the PNGs from  default_proj/ziprc_results/figures_scaled/  into a
-%          ./figures/ folder in your Overleaf project (pareto_latency.png,
-%          pareto_errorbars.png, calibration_auc.png).
+% Figures: live in  default_proj/ziprc/poster/figures/  (already in this repo). Upload them
+%          into a ./figures/ folder in your Overleaf project:
+%          calibration_auc.png, pareto_latency.png, blend_frontier.png
+%          (blend_study.png is the 2-panel frontier+calibration-law version, if more space).
 
 \documentclass[final]{beamer}
 
@@ -142,8 +143,10 @@
     \begin{itemize}
       \item \textbf{prune} trajectories predicted to fail (saves \emph{compute});
       \item \textbf{early-stop} once a trajectory is confidently correct (saves \emph{latency});
-      \item \textbf{allocate} samples by predicted difficulty.
+      \item \textbf{allocate} samples by predicted difficulty (across prompts).
     \end{itemize}
+    We measure these alone \emph{and} \textbf{blended} (allocate $\times$ prune) under a rigorous
+    prompt-bootstrap $+$ held-out inference layer (column~3).
   \end{block}
 
   \begin{block}{Introspection is well-calibrated}
@@ -211,19 +214,42 @@
     \end{figure}
   \end{alertblock}
 
+  \begin{block}{Blending the levers: adaptive-K $\times$ prune \emph{(A. Kim)}}
+    Composing the across-prompt allocator with within-sample pruning, under a \textbf{rigor layer}
+    (prompt-level bootstrap CIs, \textbf{held-out} operating-point selection, a
+    difficulty-controlled partial correlation, $+$ leakage \& faithfulness audits):
+    \begin{figure}
+      \centering
+      \includegraphics[width=0.92\linewidth]{figures/blend_frontier.png}
+      \caption{Blend frontier (squares) sits left of fixed+full (circles): \emph{same accuracy,
+      less compute}. Held-out: $\sim$20--25\% compute at \emph{neutral} accuracy (4 pools).}
+    \end{figure}
+    \begin{itemize}
+      \item \textbf{Savings \emph{super}-compound:} the blend beats the product of the two levers
+        by up to $+19$pp --- prune is \emph{more} effective under adaptive allocation (every
+        CI $>0$); ``allocation-agnostic'' is \emph{rejected}.
+      \item \textbf{Calibration governs prune-safety} --- but pruning acts at mid-trajectory AUC
+        $\approx$0.6--0.7, far below the 0.91 value-\emph{end} AUC, so even calibrated pools pay
+        some accuracy. A \emph{within-pool} tendency; the clean cross-pool law is \emph{not}
+        established ($r{=}0.35$, $p{=}0.36$).
+      \item \textbf{The bottleneck is the \emph{problem}, not the head:} a head-swap lowering
+        calibration at \emph{fixed} difficulty (same samples) did \emph{not} change prune-safety.
+      \item \textbf{Rigor caught optimism:} the single-run ``Pareto free lunch $+$ accuracy
+        synergy'' did \emph{not} survive held-out inference --- the honest result is the
+        efficiency gain above.
+    \end{itemize}
+  \end{block}
+
   \begin{block}{Further findings}
     \begin{itemize}
       \item \textbf{Honest scoping:} value-\emph{selection} does not beat majority
-        voting~\cite{wang2023selfconsistency} (value@8 $0.74$ vs majority@8 $0.78$). The
+        voting~\cite{wang2023selfconsistency} (value@8 $0.74$ vs majority@8 $0.78$) --- the
         contribution is adaptive \emph{allocation}, not better picking.
-      \item \textbf{Structured 3-outcome verifier — negative, but informative:} failure-mode
-        diversity is \emph{policy-capability-dependent}. Strong RLOO fails \emph{coherently}
-        (3\% incoherent); weak SFT fails \emph{incoherently} (10\% coherent). No single 0.5B
-        checkpoint balances all three classes, so the structured head matches binary
-        (AUC $0.867$ vs $0.865$).
-      \item \textbf{Cross-policy transfer:} the introspection head is largely
-        \emph{policy-agnostic} — an RLOO-trained head scores SFT rollouts at AUC $0.865$
-        ($\approx$ the matched SFT head's $0.867$).
+      \item \textbf{Structured 3-outcome verifier --- negative but informative:} failure-mode
+        diversity is \emph{policy-capability-dependent}; no single 0.5B checkpoint balances all
+        three classes, so the structured head matches binary (AUC $0.867$ vs $0.865$).
+      \item \textbf{Cross-policy transfer:} the head is largely \emph{policy-agnostic} --- an
+        RLOO head scores SFT rollouts at AUC $0.865$ ($\approx$ the matched SFT head's $0.867$).
     \end{itemize}
   \end{block}
 
@@ -231,8 +257,12 @@
     \begin{itemize}
       \item \textbf{(B, A. Kim):} zero-overhead introspection on a 0.5B \emph{verifiable} task
         yields a tunable compute/latency Pareto ($-63\%$ compute or $-48\%$ latency), with
-        calibration matching the original paper; the structured verifier is
-        capability-dependent.
+        calibration matching the original paper. \textbf{Blending} allocation $\times$ prune
+        \emph{super}-compounds into a rigorously-verified $\sim$20--25\% compute saving at
+        \emph{neutral} accuracy; prune-safety is governed by \emph{mid-trajectory} separability,
+        set more by the \emph{problem} than the head. Throughout, a prompt-bootstrap $+$
+        held-out rigor layer \textbf{corrected the optimistic single-run claims} --- the
+        structured verifier and the ``free-lunch'' both proved more modest than they first looked.
       % MARCO: add one-line conclusion for the frontier-curriculum half (A).
       \item \textbf{(A, M. Vizcarra):} frontier-prompt selection gives RLOO a clearer learning
         signal than uniform sampling. \emph{[finalize]}
