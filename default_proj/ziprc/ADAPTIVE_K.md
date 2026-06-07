@@ -294,10 +294,46 @@ identical.)
    the adaptive lift as −0.075; allocating from the fresh probe restored +0.008 (consistent with
    §2c probe_eval +0.017). Faithful online allocation matters.
 
-**Bottom line (§4c):** adaptive-K + prune is the right first blend — savings **compound** and the
-levers are **synergistic on accuracy** (allocation makes prune safer). The blend isn't yet a free
-lunch on Countdown-hard because the head's hard-pool calibration caps how aggressively prune can
-cut; the unlock is a better-calibrated head + compute-unit allocation, exactly §4b's staged plan.
+**Control — the calibrated main pool (`blend_main`, n=50, preliminary).** We re-ran the identical
+blend on the *main* Countdown pool (head `lite_binary_512`, value-AUC 0.91). Per-threshold oracle
+(baseline fixed+full = 0.700, cost 1413):
+
+| τ | fixed+prune | adaptive+full | **adaptive+prune** | blend cost | Pareto? |
+|---|---|---|---|---|---|
+| 0.5 | 0.600 (−0.10) | 0.800 | **0.680** | −27% | no |
+| **0.4** | 0.660 (−0.04) | 0.800 | **0.720 (≥0.700)** | **−22%** | **yes** |
+| 0.3 | 0.640 | 0.800 | **0.720** | −9% | yes |
+
+Three reads, refining §4c:
+- **Calibration gates whether prune's accuracy cost is *recoverable by tuning*** — the τ-sweep is
+  the tell. On main the pruned-but-correct samples sit at the **borderline** (0.4–0.5), so τ=0.4
+  halves the hit (−0.10→−0.04) and the blend reaches **Pareto-dominance** (oracle ≥ baseline at
+  −22% compute). On hard the τ-sweep was **flat** — the lost samples are *confidently* mis-rated
+  (<0.3), unrecoverable. So "calibration is the ceiling" sharpens to: calibration sets whether the
+  loser-distribution is *separable* from the winners by a threshold.
+- **Adaptive-K lifts +0.10 on main** (mid-trajectory online version): 31/50 prompts are solved by
+  the 2-sample probe and skipped, concentrating budget on the hard tail. This **updates the old
+  "null on main"** (that was the *start-based* allocator, §2) — the mid-trajectory online version
+  works on main too, consistent with §2b's start-fails / mid-works arc.
+- **samples ≠ compute, emphatically:** adaptive at matched *samples* costs **+25%** compute on main
+  (it piles samples onto the long hard-tail trajectories) — bigger than hard's +6.6%. Yet
+  adaptive+*prune* still lands at −22% net, because prune reclaims those long doomed streams.
+- **Caveat:** only 50 unique prompts were available (`test_scored_256`), so oracle granularity is
+  0.02 and the τ=0.4 Pareto-crossing is a ~1-prompt margin — the *compute* savings are robust
+  (continuous) but the dominance claim needs a larger main test set to firm up.
+
+| | prune accuracy-cost *τ-recoverable*? (calibration) | adaptive *lifts*? (skippable-easy + hard-tail mix) |
+|---|---|---|
+| **main pool** (AUC 0.91) | ✅ yes — Pareto at τ=0.4 | ✅ +0.10 (62% probe-solved → concentrate) |
+| **hard pool** (OOD-ish) | ❌ no — τ-invariant hit | ✅ +0.01–0.03 (30% probe-solved) |
+
+**Bottom line (§4c):** adaptive-K + prune is the right first blend — savings **compound**, the
+levers are **synergistic on accuracy**, and on a **calibrated** pool the blend reaches genuine
+**Pareto-dominance** (−22% compute at ≥ baseline oracle, τ=0.4, n=50 preliminary). The single
+requirement is a head whose *mid-trajectory* value cleanly separates winners from losers — on
+Countdown-hard it doesn't (losers look confidently doomed yet some are correct), which is the
+calibration unlock §4b's staged plan targets. Net across pools: the blend works wherever the head
+is calibrated *and* the difficulty mix lets allocation act.
 
 ---
 
