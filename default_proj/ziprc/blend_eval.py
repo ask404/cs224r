@@ -89,7 +89,10 @@ def main():
     ap.add_argument("--smooth-w", type=int, default=4)
     ap.add_argument("--prune-thresholds", type=float, nargs="+", default=[0.5, 0.4, 0.3])
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", default=None, help="Per-prompt parquet for follow-up analysis.")
+    ap.add_argument("--seeds", type=int, nargs="+", default=None,
+                    help="If set, repeat the whole online run at each seed and report mean±std "
+                         "+ per-seed Pareto-dominance count (firms up small-n pools).")
+    ap.add_argument("--out", default=None, help="Threshold-sweep summary parquet.")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -117,79 +120,85 @@ def main():
     if args.num_prompts and args.num_prompts < len(df):
         df = df.iloc[: args.num_prompts].reset_index(drop=True)
 
-    # --- ONE generation per prompt: pool_k samples, record vhist/len/correct/value_q25 ---
-    pools, promise, solved = [], [], []
-    for idx, r in enumerate(df.itertuples(index=False)):
-        gt = {"target": int(r.target), "numbers": [int(x) for x in r.nums]}
-        torch.manual_seed(args.seed + int(getattr(r, "prompt_idx", idx)))
-        out = dec.decode_prompt(r.prompt, args.pool_k, args.max_new_tokens, args.temperature,
-                                args.top_p, args.top_k, policy="none",
-                                warmup=args.warmup, prune_interval=args.prune_interval,
-                                keep_min=args.keep_min, smooth_w=args.smooth_w)
-        pool = []
-        for s in out["samples"]:
-            vh = s["vhist"]
-            q25 = vh[len(vh) // 4] if vh else 0.0            # value 25% through the trajectory
-            pool.append({"vhist": vh, "n_tokens": s["n_tokens"],
-                         "correct": compute_score(s["text"], gt) == 1.0, "q25": q25})
-        pools.append(pool)
-        probe = pool[: args.probe_k]
-        promise.append(float(np.mean([p["q25"] for p in probe])) if probe else 0.0)
-        solved.append(bool(any(p["correct"] for p in probe)))
-        if (idx + 1) % 20 == 0:
-            print(f"[blend] generated {idx + 1}/{len(df)} prompts", flush=True)
+    def run_seed(seed):
+        """One full online run at `seed`: generate pools, allocate from the fresh probe, and
+        return per-(tau, arm, prune) mean oracle & cost plus allocation info."""
+        pools, promise, solved = [], [], []
+        for idx, r in enumerate(df.itertuples(index=False)):
+            gt = {"target": int(r.target), "numbers": [int(x) for x in r.nums]}
+            torch.manual_seed(seed * 100003 + int(getattr(r, "prompt_idx", idx)))
+            o = dec.decode_prompt(r.prompt, args.pool_k, args.max_new_tokens, args.temperature,
+                                  args.top_p, args.top_k, policy="none",
+                                  warmup=args.warmup, prune_interval=args.prune_interval,
+                                  keep_min=args.keep_min, smooth_w=args.smooth_w)
+            pool = []
+            for s in o["samples"]:
+                vh = s["vhist"]
+                q25 = vh[len(vh) // 4] if vh else 0.0        # value 25% through the trajectory
+                pool.append({"vhist": vh, "n_tokens": s["n_tokens"],
+                             "correct": compute_score(s["text"], gt) == 1.0, "q25": q25})
+            pools.append(pool)
+            probe = pool[: args.probe_k]
+            promise.append(float(np.mean([p["q25"] for p in probe])) if probe else 0.0)
+            solved.append(bool(any(p["correct"] for p in probe)))
+        n_extra = allocate(promise, solved, args.budget, args.probe_k, args.kmax, args.scheme)
+        K_i = args.probe_k + n_extra.astype(int)
+        res = {"K_f": int(round(K_i.mean())), "meanK": float(K_i.mean()), "solved": int(np.sum(solved))}
+        K_f = res["K_f"]
+        for thr in args.prune_thresholds:
+            cells = {(a, p): {"cost": [], "orc": []} for a in ("fixed", "adaptive") for p in (False, True)}
+            for j, pool in enumerate(pools):
+                for arm, K in (("fixed", K_f), ("adaptive", int(K_i[j]))):
+                    selp = pool[:K]
+                    for prune in (False, True):
+                        c, s = sim(selp, prune, args.warmup, args.prune_interval, args.keep_min, args.smooth_w, thr)
+                        cells[(arm, prune)]["cost"].append(c)
+                        cells[(arm, prune)]["orc"].append(float(s))
+            for a in ("fixed", "adaptive"):
+                for p in (False, True):
+                    res[(thr, a, p, "orc")] = float(np.mean(cells[(a, p)]["orc"]))
+                    res[(thr, a, p, "cost")] = float(np.mean(cells[(a, p)]["cost"]))
+        return res
 
-    # --- ONLINE allocation from THIS pool's fresh probe (identical logic to allocate_budget) ---
-    n_extra = allocate(promise, solved, args.budget, args.probe_k, args.kmax, args.scheme)
-    K_i = args.probe_k + n_extra.astype(int)
-    K_f = int(round(K_i.mean()))
-    print(f"[blend] {len(df)} prompts | probe_k={args.probe_k} pool_k={args.pool_k} "
-          f"K_fixed={K_f} mean K_i={K_i.mean():.2f} | {int(np.sum(solved))} probe-solved (fresh)", flush=True)
+    seeds = args.seeds if args.seeds else [args.seed]
+    runs = []
+    for si, sd in enumerate(seeds):
+        runs.append(run_seed(sd))
+        print(f"[blend] seed {sd} done ({si + 1}/{len(seeds)}) | K_fixed={runs[-1]['K_f']} "
+              f"meanK={runs[-1]['meanK']:.2f} probe-solved={runs[-1]['solved']}/{len(df)}", flush=True)
 
-    base = None
+    def agg(thr, a, p, field):
+        v = [r[(thr, a, p, field)] for r in runs]
+        return float(np.mean(v)), float(np.std(v))
+
+    print(f"\n=== BLEND multi-seed: adaptive-K x prune ({len(seeds)} seeds, n={len(df)} prompts) ===")
     summary = []
     for thr in args.prune_thresholds:
-        cells = {(a, p): {"cost": [], "orc": []} for a in ("fixed", "adaptive") for p in (False, True)}
-        for j, pool in enumerate(pools):
-            for arm, K in (("fixed", K_f), ("adaptive", int(K_i[j]))):
-                selp = pool[:K]
-                for prune in (False, True):
-                    c, s = sim(selp, prune, args.warmup, args.prune_interval, args.keep_min, args.smooth_w, thr)
-                    cells[(arm, prune)]["cost"].append(c)
-                    cells[(arm, prune)]["orc"].append(float(s))
-
-        def mc(a, p):
-            return float(np.mean(cells[(a, p)]["cost"]))
-
-        def mo(a, p):
-            return float(np.mean(cells[(a, p)]["orc"]))
-
-        if base is None:
-            base = mc("fixed", False)
-            print(f"\n[ baseline fixed+full: oracle {mo('fixed', False):.3f}  cost {base:.1f} ]")
-        print(f"\n=== prune threshold tau={thr:g} ===")
-        print(f"  {'config':<20} {'oracle':>7} {'cost':>8}  {'vs base':>9}")
+        bf_o, bf_os = agg(thr, "fixed", False, "orc")
+        bf_c, _ = agg(thr, "fixed", False, "cost")
+        print(f"\n--- tau={thr:g} ---  (cost shown vs baseline fixed+full = {bf_c:.0f})")
+        print(f"  {'config':<16} {'oracle mean±std':>16} {'cost':>8} {'vs base':>9}")
         for a in ("fixed", "adaptive"):
             for p in (False, True):
-                tag = f"{a} + {'prune' if p else 'full '}"
-                print(f"  {tag:<20} {mo(a, p):7.3f} {mc(a, p):8.1f}  {(1 - mc(a, p) / base) * 100:+8.1f}%")
-        p_f = 1 - mc("fixed", True) / mc("fixed", False)
-        p_a = 1 - mc("adaptive", True) / mc("adaptive", False)
-        lift_full = mo("adaptive", False) - mo("fixed", False)
-        lift_prune = mo("adaptive", True) - mo("fixed", True)
-        dom = (mc("adaptive", True) < base) and (mo("adaptive", True) >= mo("fixed", False) - 1e-9)
-        print(f"  prune token-save: fixed {p_f * 100:+.1f}% / adapt {p_a * 100:+.1f}%   "
-              f"adaptive lift: full {lift_full:+.3f} / pruned {lift_prune:+.3f}   "
-              f"blend Pareto-dominates: {dom}")
-        summary.append({"tau": thr, "fixed_full_orc": mo("fixed", False), "fixed_prune_orc": mo("fixed", True),
-                        "adapt_full_orc": mo("adaptive", False), "adapt_prune_orc": mo("adaptive", True),
-                        "fixed_full_cost": mc("fixed", False), "fixed_prune_cost": mc("fixed", True),
-                        "adapt_full_cost": mc("adaptive", False), "adapt_prune_cost": mc("adaptive", True),
-                        "blend_save_pct": (1 - mc("adaptive", True) / base) * 100, "pareto_dom": dom})
+                o, os_ = agg(thr, a, p, "orc")
+                c, _ = agg(thr, a, p, "cost")
+                print(f"  {a + '+' + ('prune' if p else 'full'):<16} {o:7.3f} ± {os_:.3f}   "
+                      f"{c:8.0f} {(1 - c / bf_c) * 100:+8.1f}%")
+        # paired per-seed dominance: same-seed adaptive+prune oracle >= fixed+full AND cheaper
+        dom = [(r[(thr, "adaptive", True, "orc")] >= r[(thr, "fixed", False, "orc")] - 1e-9)
+               and (r[(thr, "adaptive", True, "cost")] < r[(thr, "fixed", False, "cost")]) for r in runs]
+        ap_o, ap_os = agg(thr, "adaptive", True, "orc")
+        ap_c, _ = agg(thr, "adaptive", True, "cost")
+        print(f"  >>> blend(adaptive+prune): oracle {ap_o:.3f}±{ap_os:.3f} at {(1 - ap_c / bf_c) * 100:+.1f}% compute "
+              f"| Pareto-dominates in {sum(dom)}/{len(seeds)} seeds")
+        summary.append({"tau": thr, "n_seeds": len(seeds), "n_prompts": len(df),
+                        "fixed_full_orc": bf_o, "fixed_full_orc_std": bf_os, "fixed_full_cost": bf_c,
+                        "adapt_prune_orc": ap_o, "adapt_prune_orc_std": ap_os, "adapt_prune_cost": ap_c,
+                        "pareto_seeds": int(sum(dom))})
 
     if args.out:
         pd.DataFrame(summary).to_parquet(args.out, index=False)
-        print(f"\n[blend] wrote threshold-sweep summary -> {args.out}")
+        print(f"\n[blend] wrote multi-seed summary -> {args.out}")
 
 
 if __name__ == "__main__":

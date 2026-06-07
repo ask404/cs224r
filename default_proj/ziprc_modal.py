@@ -375,8 +375,9 @@ def _build_pipeline(name: str):
         return [
             ["ziprc/blend_eval.py", ["--model", H, "--prompts", f"{D}/test_scored_256.parquet",
                                      "--probe-k", "2", "--pool-k", "8", "--budget", "6", "--kmax", "8",
-                                     "--scheme", "frontier", "--num-prompts", "120", "--max-new-tokens", "512",
+                                     "--scheme", "frontier", "--num-prompts", "50", "--max-new-tokens", "512",
                                      "--prune-thresholds", "0.5", "0.4", "0.3",
+                                     "--seeds", "0", "1", "2", "3", "4", "5",
                                      "--out", f"{D}/blend_main_sweep.parquet"]],
         ]
     raise ValueError(f"unknown pipeline: {name}")
