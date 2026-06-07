@@ -258,6 +258,47 @@ the *same* joint (reward, length) prediction (this is Direction C in `AGENT_DIRE
 **Net:** blend **adaptive-K + prune now** (aligned, calibrated region); **gate earlystop on
 hardening the length head** (the compute-vs-latency trade needs trustworthy cost prediction).
 
+### 4c. Measured: the blend on Countdown-hard (`blend_eval.py`)
+
+First falsifiable test of the blend. Generate a pool once per prompt (120 hard-test prompts),
+allocate **online** from that pool's own fresh `value_q25` probe (B=6, kmax=8), and replay the
+exact decode-time prune rule offline over a τ sweep — so the full adaptive×prune 2×2 comes from
+one generation. Cost = active forward passes; oracle = any-correct. (τ=0.5 shown; 0.4/0.3 nearly
+identical.)
+
+| config | oracle | cost | vs fixed+full |
+|---|---|---|---|
+| fixed + full | 0.383 | 2651 | baseline |
+| fixed + prune | 0.317 | 1388 | −47.6% cost, **−0.066 oracle** |
+| adaptive + full | 0.392 | 2825 | +0.008 oracle, **+6.6% cost** |
+| **adaptive + prune** | **0.350** | **1379** | **−48.0% cost, −0.033 oracle** |
+
+1. **Compute savings compound.** Prune cuts the same fraction under either allocation (fixed
+   −47.6%, adaptive −51%: **allocation-agnostic**), and the blend's −48.0% ≈ the product-of-levers
+   prediction (−45.6%). The compute-axis thesis holds cleanly.
+2. **The levers *help* each other on accuracy — they don't fight (refutes failure-mode #4).**
+   Adaptive's oracle lift over fixed *grows* under prune: **+0.008 full → +0.033 pruned**. Prune
+   costs fixed −0.066 oracle but adaptive only −0.042 — adaptive's concentration on hard prompts
+   leaves **more survivors** when prune culls, so allocation makes pruning *safer*.
+3. **But it's still a compute-for-accuracy *trade*, not a Pareto win.** Prune's accuracy hit
+   (−0.04…−0.07) exceeds adaptive's lift (+0.01…+0.03): the blend is ~48% cheaper at ~0.03 lower
+   oracle. No τ gives free dominance.
+4. **The ceiling is head calibration, not the operating point.** τ ∈ {0.5,0.4,0.3} barely moves
+   oracle → the pruned-but-correct samples are *confidently* mis-rated (<0.3) by the head on hard
+   problems (it is OOD-ish there, like `value_first`). A gentler threshold can't recover them;
+   a **better-calibrated head on hard data** can.
+5. **Adaptive at matched *samples* costs more *compute* (+6.6%).** It concentrates samples on hard
+   prompts, which have longer trajectories — confirming **samples ≠ compute**: the controller
+   should allocate in *compute* units (needs the length head), §4b.3.
+6. **Bug caught & fixed.** v1 applied a *stale* (old-pool) allocation to fresh generation and read
+   the adaptive lift as −0.075; allocating from the fresh probe restored +0.008 (consistent with
+   §2c probe_eval +0.017). Faithful online allocation matters.
+
+**Bottom line (§4c):** adaptive-K + prune is the right first blend — savings **compound** and the
+levers are **synergistic on accuracy** (allocation makes prune safer). The blend isn't yet a free
+lunch on Countdown-hard because the head's hard-pool calibration caps how aggressively prune can
+cut; the unlock is a better-calibrated head + compute-unit allocation, exactly §4b's staged plan.
+
 ---
 
 ## 5. One-paragraph summary
