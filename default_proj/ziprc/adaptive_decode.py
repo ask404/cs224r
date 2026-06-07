@@ -204,6 +204,8 @@ class AdaptiveDecoder:
                 "text": text,
                 "finished": done[i],
                 "pruned": pruned[i],
+                "n_tokens": len(gen[i]),
+                "vhist": list(vhist[i]),     # full predicted-value trajectory (for offline prune sim)
                 "value_end": (sum(vhist[i][-16:]) / len(vhist[i][-16:])) if vhist[i] else float("nan"),
                 "value_first": vhist[i][0] if vhist[i] else float("nan"),
             })

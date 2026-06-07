@@ -346,6 +346,22 @@ def _build_pipeline(name: str):
             ["ziprc/probe_eval.py", ["--probe-set", f"{D}/hard_test16_labeled.parquet", "--extra-set", f"{D}/hard_extra_k16_labeled.parquet", "--probe-k", "2"]],
         ]
         return steps
+
+    if name == "blend":
+        # First falsifiable test of the BLEND: does adaptive-K (across-prompt allocation)
+        # compose with prune (within-sample compute) so savings compound? Allocate B=6/kmax=8
+        # from the value_q25 probe, then generate a pool ONCE per prompt and replay the full
+        # adaptive x prune 2x2 offline (faithful prune accounting from the value trajectories).
+        Hh = f"{M}/lite_binary_hard"
+        return [
+            ["ziprc/allocate_budget.py", ["--scored", f"{D}/hard_test16_scored.parquet",
+                                          "--out", f"{D}/alloc_blend.parquet", "--budget", "6",
+                                          "--probe-k", "2", "--kmax", "8",
+                                          "--signal-col", "value_q25", "--scheme", "frontier"]],
+            ["ziprc/blend_eval.py", ["--model", Hh, "--alloc", f"{D}/alloc_blend.parquet",
+                                     "--probe-k", "2", "--num-prompts", "120",
+                                     "--max-new-tokens", "512", "--out", f"{D}/blend_results.parquet"]],
+        ]
     raise ValueError(f"unknown pipeline: {name}")
 
 
