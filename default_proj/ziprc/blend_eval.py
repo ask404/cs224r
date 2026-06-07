@@ -108,6 +108,12 @@ def main():
     if "prompt_idx" in df.columns:
         df = df.drop_duplicates("prompt_idx")
     df = df.reset_index(drop=True)
+    if "target" not in df.columns or "nums" not in df.columns:   # main-pool parquet stores ground_truth
+        gt = df["ground_truth"]
+        df = df.assign(
+            target=[int(g["target"]) for g in gt],
+            nums=[[int(x) for x in (g["numbers"] if "numbers" in g else g["nums"])] for g in gt],
+        )
     if args.num_prompts and args.num_prompts < len(df):
         df = df.iloc[: args.num_prompts].reset_index(drop=True)
 

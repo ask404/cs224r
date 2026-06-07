@@ -366,6 +366,19 @@ def _build_pipeline(name: str):
                                      "--prune-thresholds", "0.5", "0.4", "0.3",
                                      "--out", f"{D}/blend_sweep.parquet"]],
         ]
+
+    if name == "blend_main":
+        # CONTROL for §4c: same blend on the MAIN Countdown pool, where the head is well-calibrated
+        # (AUC 0.91). If prune's accuracy-hit largely vanishes here -> prune Pareto-dominates ->
+        # isolates head calibration (not the mechanism) as the ceiling on Countdown-hard.
+        H = f"{M}/lite_binary_512"
+        return [
+            ["ziprc/blend_eval.py", ["--model", H, "--prompts", f"{D}/test_scored_256.parquet",
+                                     "--probe-k", "2", "--pool-k", "8", "--budget", "6", "--kmax", "8",
+                                     "--scheme", "frontier", "--num-prompts", "120", "--max-new-tokens", "512",
+                                     "--prune-thresholds", "0.5", "0.4", "0.3",
+                                     "--out", f"{D}/blend_main_sweep.parquet"]],
+        ]
     raise ValueError(f"unknown pipeline: {name}")
 
 
