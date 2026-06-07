@@ -86,6 +86,32 @@ probe lets you stop re-sampling already-solved prompts.) Magnitude is capped by 
 a mid-trajectory read, not from the prompt** — and it connects to `AGENT_DIRECTIONS.md` (an
 SLM can introspect to abort/escalate *after starting*, but not route *before trying*, OOD).
 
+## 2c. Online probe-and-reallocate — end-to-end (`allocate_budget.py` + `probe_eval.py`)
+
+We built the live version: probe 2 samples per prompt, read `value_q25`, **generate only
+FRESH extras** on the unsolved-but-promising frontier (per-prompt variable sampling via
+`gen_rollouts --n-col`), and compare to fixed-K at matched mean budget — with real generation
+and true compute accounting (not the offline pool).
+
+| budget B | adaptive (probe + reallocate) | fixed@B | gain |
+|---|---|---|---|
+| 4 | **0.371** | 0.346 | **+0.025** |
+| 6 | **0.371** | 0.354 | **+0.017** |
+
+- **Online beats fixed-K at matched budget**, by *more* than the offline proxy (+0.025 vs
+  +0.015 at B=4) — the online version isn't capped at a fixed pool of 8.
+- **The gain is largest at LOW budget** (the practically relevant regime): adaptive allocation
+  matters most when samples are scarce; fixed catches up as budget grows (everyone eventually
+  gets enough).
+- **Adaptive plateaus at 0.371** because of the hopeless tail (tiers 5–6, 0% solvable — no
+  allocation helps); the action is the tier-4 frontier. **32% of prompts were solved by the
+  2-sample probe and got zero extra**, freeing that budget for the frontier.
+- **Leakage-clean:** train/test problem-disjoint (`leakage_check.py`), and the probe samples
+  are disjoint from the evaluated extras by construction.
+
+**Bottom line:** mid-trajectory adaptive-K works end-to-end on a task where start-based
+allocation cannot, and the efficiency win concentrates at low budgets — where it matters.
+
 ---
 
 ## 3. Follow-on 1 — harder, wider-difficulty math benchmarks
