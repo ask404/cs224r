@@ -49,6 +49,45 @@ This is the key handoff to the follow-on work.
 
 ---
 
+## 2b. Experimental resolution — *start-based* fails, *mid-trajectory* works (`adaptive_k_mid.py`)
+
+We ran the harder-Countdown experiment (`EXPERIMENT_difficulty.md`) and the mid-trajectory fix.
+Two findings:
+
+**(i) Harder difficulty alone did NOT fix it — and *why* is the real result.** Operand
+cardinality 3→6 created huge true-difficulty variance (pass@1 by tier: 0.72 / 0.31 / 0.00 /
+0.00 — 5–6-number Countdown is fully OOD for the RLOO policy). Yet adaptive-K stayed null,
+because **the head's *prompt-level* prediction collapses OOD:**
+
+| read point | value_first (0%) | value_q25 (25%) | value_mean | value_end |
+|---|---|---|---|---|
+| AUC (hard set) | **0.237** (below chance!) | **0.842** | 0.951 | 0.962 |
+
+The OOD policy doesn't *represent* that a 6-number problem is hopeless at the prompt, so the
+head can't read difficulty there (it's even mildly *misled* — more numbers look like more
+opportunity). **Introspection is bounded by the policy's own self-knowledge:** it can tell
+*"is this trajectory succeeding"* (value_q25/_end) but not *"can I do this at all"*
+(value_first) when OOD.
+
+**(ii) Allocating from a *mid-trajectory* probe fixes it.** A two-stage allocator — probe 2
+samples, read `value_q25`, then pour the remaining budget into unsolved-but-promising prompts
+— gives a **consistent +1.5 oracle points** with the mid signal vs **~0** with the start
+signal (the controlled contrast):
+
+| mean-K | promise gain @ value_q25 (mid) | @ value_first (start) |
+|---|---|---|
+| 3–5 | **+0.015** | ≈ 0 |
+
+(A signal-independent ~+0.01 also comes from the two-stage structure itself — a verifiable
+probe lets you stop re-sampling already-solved prompts.) Magnitude is capped by the hopeless
+5–6-number tail that no allocation can help; the action is on the tier-4 frontier. The real
+*online* version (probe to ~25%, then spend fresh generation, ideally on `value_mean`, AUC
+0.95) is the natural next build. **This is the central practical takeaway: do adaptive-K from
+a mid-trajectory read, not from the prompt** — and it connects to `AGENT_DIRECTIONS.md` (an
+SLM can introspect to abort/escalate *after starting*, but not route *before trying*, OOD).
+
+---
+
 ## 3. Follow-on 1 — harder, wider-difficulty math benchmarks
 
 **Hypothesis:** adaptive-K's gain should scale with the **variance** of prompt difficulty.

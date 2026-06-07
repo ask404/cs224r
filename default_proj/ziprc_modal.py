@@ -153,6 +153,10 @@ def run_gen_hard(a): return _run("ziprc/make_countdown_hard.py", a)
 def run_difficulty(a): return _run("ziprc/difficulty_analysis.py", a)
 
 
+@_cpu_fn
+def run_adaptive_k_mid(a): return _run("ziprc/adaptive_k_mid.py", a)
+
+
 # Long-running multi-stage pipeline that runs ENTIRELY in one remote container, so the
 # sequence survives the local client disconnecting (e.g. laptop sleep). Launch with
 # `modal run --detach`. Each step commits the volume, so partial progress is preserved.
@@ -301,12 +305,13 @@ def main(*raw):
     parser = argparse.ArgumentParser()
     parser.add_argument("stage", choices=("gen", "label", "train", "score", "select", "decode",
                                           "figures", "adaptive_k", "aggregate", "calib_tv",
-                                          "gen_hard", "difficulty"))
+                                          "gen_hard", "difficulty", "adaptive_k_mid"))
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     ns = parser.parse_args(raw)
     a = ns.rest[1:] if ns.rest[:1] == ["--"] else ns.rest
     fn = {"gen": run_gen, "label": run_label, "train": run_train, "score": run_score,
           "select": run_select, "decode": run_decode, "figures": run_figures,
           "adaptive_k": run_adaptive_k, "aggregate": run_aggregate, "calib_tv": run_calib_tv,
-          "gen_hard": run_gen_hard, "difficulty": run_difficulty}[ns.stage]
+          "gen_hard": run_gen_hard, "difficulty": run_difficulty,
+          "adaptive_k_mid": run_adaptive_k_mid}[ns.stage]
     print(fn.remote(a))
