@@ -335,6 +335,11 @@ Countdown-hard it doesn't (losers look confidently doomed yet some are correct),
 calibration unlock §4b's staged plan targets. Net across pools: the blend works wherever the head
 is calibrated *and* the difficulty mix lets allocation act.
 
+> **The §4c numbers above are single-run/preliminary.** The full, leakage-audited, multi-seed
+> study — prompt-bootstrap CIs, held-out τ selection, a calibration *law* tested by partial
+> correlation (controlling difficulty) + a same-difficulty/different-head causal decoupler — is in
+> **[`BLEND_STUDY.md`](BLEND_STUDY.md)**. That is the canonical writeup; §4c is the first sketch.
+
 ---
 
 ## 5. One-paragraph summary
