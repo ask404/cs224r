@@ -145,6 +145,10 @@ def run_aggregate(a): return _run("ziprc/aggregate_pareto.py", a)
 def run_calib_tv(a): return _run("ziprc/calibration_tv.py", a)
 
 
+@_cpu_fn
+def run_gen_hard(a): return _run("ziprc/make_countdown_hard.py", a)
+
+
 # Long-running multi-stage pipeline that runs ENTIRELY in one remote container, so the
 # sequence survives the local client disconnecting (e.g. laptop sleep). Launch with
 # `modal run --detach`. Each step commits the volume, so partial progress is preserved.
@@ -266,12 +270,13 @@ def main(*raw):
         print(run_pipeline.remote(json.dumps(steps)))
         return
     parser = argparse.ArgumentParser()
-    parser.add_argument("stage", choices=("gen", "label", "train", "score", "select",
-                                          "decode", "figures", "adaptive_k", "aggregate", "calib_tv"))
+    parser.add_argument("stage", choices=("gen", "label", "train", "score", "select", "decode",
+                                          "figures", "adaptive_k", "aggregate", "calib_tv", "gen_hard"))
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     ns = parser.parse_args(raw)
     a = ns.rest[1:] if ns.rest[:1] == ["--"] else ns.rest
     fn = {"gen": run_gen, "label": run_label, "train": run_train, "score": run_score,
           "select": run_select, "decode": run_decode, "figures": run_figures,
-          "adaptive_k": run_adaptive_k, "aggregate": run_aggregate, "calib_tv": run_calib_tv}[ns.stage]
+          "adaptive_k": run_adaptive_k, "aggregate": run_aggregate, "calib_tv": run_calib_tv,
+          "gen_hard": run_gen_hard}[ns.stage]
     print(fn.remote(a))
