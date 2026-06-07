@@ -3,8 +3,8 @@
 *A study of blending zero-overhead ZIP-RC-Lite introspection into a unified test-time controller:
 when do the levers compound, when do they fight, and what single quantity governs it all.*
 
-> Status: living document. Result tables marked **[multi-seed]** are filled from the
-> leakage-audited multi-seed runs (`blend_eval.py`, `make_blend_figures.py`).
+> Status: living document. Tables marked **[… pending]** are filled from the leakage-audited,
+> prompt-bootstrapped runs (`blend_eval.py` → `blend_stats.py` → `law_combine.py`).
 
 ---
 
@@ -137,6 +137,15 @@ the difficulty gradient.
 gradient (hard tiers 3–6), each `(mid-AUC, signed prune-hit, base-oracle, n)`; combined Pearson,
 **partial r | base-oracle**, and permutation p reported by `law_combine.py`.
 
+**The causal decoupler — same difficulty, different calibration.** The partial correlation controls
+difficulty *statistically*; the `blend_cross` run controls it *by construction*. Because the value
+head is head-only-trained on a **frozen** backbone and the reserved logits are **masked before
+sampling**, generation is head-independent: running the *same* hard pool with the out-of-domain
+head `lite_binary_512` (trained on easy Countdown) yields **identical samples** but a worse-
+calibrated value signal. If, at *fixed* difficulty and *fixed* samples, the worse-calibrated head
+shows lower mid-AUC **and** a larger prune accuracy-hit, calibration — not difficulty — drives
+prune-safety. **[pending: (hard, in-domain head) vs (hard, OOD head)]**
+
 **Downstream consequence — the held-out free lunch.** Where the law says prune is safe, the blend
 should Pareto-dominate. We report the blend's **held-out** saving + oracle-delta (operating point
 chosen on a disjoint half of prompts), with prompt-bootstrap CIs. **[pending]**
@@ -163,13 +172,18 @@ low* (<0.3), τ-invariant and unrecoverable. The diagnostic reports exactly this
 ## 7. Reproduce
 
 ```
-modal run ziprc_modal.py pipeline -- blend          # hard pool: frontier + per-tier gradient
+# each pipeline: blend_eval (generate+dump) -> blend_stats (rigorous offline stats -> law_*.parquet)
+modal run ziprc_modal.py pipeline -- blend          # hard pool (lite_binary_hard), tiers 3-6
 modal run ziprc_modal.py pipeline -- blend_main      # 50 held-out test prompts, 6 seeds
 modal run ziprc_modal.py pipeline -- blend_holdout   # 300 leakage-safe head-clean prompts
-# figures:
-modal run ziprc_modal.py figures -- ziprc/make_blend_figures.py --sweeps main:...:AUC hard:...:AUC ...
+modal run ziprc_modal.py pipeline -- blend_cross     # hard pool, OOD head -> decouple calibration
+# combine the law across pools (partial correlation + permutation) and plot:
+python ziprc/law_combine.py --law-points law_main.parquet law_holdout.parquet law_hard.parquet law_cross.parquet
+python ziprc/make_blend_figures.py --sweeps main:..._sweep.parquet hard:... --law-points law_*.parquet
 ```
 
-Core code: `blend_eval.py` (faithful offline blend + frontier + calibration diagnostic + per-tier
-gradient), `allocate_budget.py::allocate` (shared online allocator), `make_holdout.py` (leakage-safe
-pool), `make_blend_figures.py` (frontiers + calibration-law plot).
+Core code: `blend_core.py` (shared faithful prune replay + tie-corrected AUC), `blend_eval.py`
+(generate-once + offline frontier + calibration diagnostic + raw dump), `blend_stats.py`
+(prompt-bootstrap CIs, held-out τ, falsifiable mechanism tests), `law_combine.py` (partial
+correlation + permutation), `allocate_budget.py::allocate` (shared online allocator),
+`make_holdout.py` (leakage-safe pool), `make_blend_figures.py` (frontiers + calibration-law plot).
