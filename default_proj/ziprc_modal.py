@@ -430,6 +430,13 @@ def _build_pipeline(name: str):
             ["ziprc/blend_stats.py", ["--dump", f"{D}/blend_cross_dump.parquet", "--name", "hard_oodhead",
                                       "--out-law", f"{D}/law_cross.parquet"]],
         ]
+
+    if name == "reanalyze":
+        # Re-run the rigorous stats on EXISTING dumps (no regeneration) -> law_*.parquet.
+        return [["ziprc/blend_stats.py", ["--dump", f"{D}/blend_{tag}_dump.parquet", "--name", nm,
+                                          "--out-law", f"{D}/law_{nm}.parquet"]]
+                for tag, nm in (("main", "main"), ("hard", "hard"),
+                                ("holdout", "holdout"), ("cross", "hard_oodhead"))]
     raise ValueError(f"unknown pipeline: {name}")
 
 
