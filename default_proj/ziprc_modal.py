@@ -317,6 +317,35 @@ def _build_pipeline(name: str):
                                          "--extra-set", f"{D}/hard_extra_b{B}_labeled.parquet", "--probe-k", "2"]],
             ]
         return steps
+    if name == "probe_sweep":
+        steps = []
+        # (A) budget sweep at kmax=8 (new points 3 and 8; combine with the 4/6 already run)
+        for B in (3, 8):
+            steps += [
+                ["ziprc/allocate_budget.py", ["--scored", f"{D}/hard_test_scored.parquet", "--out", f"{D}/alloc_b{B}.parquet",
+                                              "--budget", str(B), "--probe-k", "2", "--kmax", "8", "--scheme", "frontier"]],
+                ["ziprc/gen_rollouts.py", ["--model", _POLICY, "--from-parquet", f"{D}/alloc_b{B}.parquet", "--n-col", "n_extra",
+                                           "--out", f"{D}/hard_extra_b{B}_rollouts.parquet", "--max-num-prompts", "400"]],
+                ["ziprc/label_rollouts.py", ["--in-parquet", f"{D}/hard_extra_b{B}_rollouts.parquet",
+                                             "--out-parquet", f"{D}/hard_extra_b{B}_labeled.parquet", "--judge", "heuristic"]],
+                ["ziprc/probe_eval.py", ["--probe-set", f"{D}/hard_test_labeled.parquet",
+                                         "--extra-set", f"{D}/hard_extra_b{B}_labeled.parquet", "--probe-k", "2"]],
+            ]
+        # (B) higher-kmax variant: 16-sample pool, kmax=16, B=6 -> the frontier gets headroom
+        steps += [
+            ["ziprc/gen_rollouts.py", ["--model", _POLICY, "--dataset", _DS, "--from-parquet", f"{D}/hard_test.parquet",
+                                       "--out", f"{D}/hard_test16_rollouts.parquet", "--max-num-prompts", "240", "--samples-per-prompt", "16"]],
+            ["ziprc/label_rollouts.py", ["--in-parquet", f"{D}/hard_test16_rollouts.parquet", "--out-parquet", f"{D}/hard_test16_labeled.parquet", "--judge", "heuristic"]],
+            ["ziprc/score_joint_head.py", ["--model", f"{M}/lite_binary_hard", "--in-parquet", f"{D}/hard_test16_labeled.parquet",
+                                           "--out-parquet", f"{D}/hard_test16_scored.parquet", "--reward-values", "0.0", "1.0"]],
+            ["ziprc/allocate_budget.py", ["--scored", f"{D}/hard_test16_scored.parquet", "--out", f"{D}/alloc_k16.parquet",
+                                          "--budget", "6", "--probe-k", "2", "--kmax", "16", "--scheme", "frontier"]],
+            ["ziprc/gen_rollouts.py", ["--model", _POLICY, "--from-parquet", f"{D}/alloc_k16.parquet", "--n-col", "n_extra",
+                                       "--out", f"{D}/hard_extra_k16_rollouts.parquet", "--max-num-prompts", "400"]],
+            ["ziprc/label_rollouts.py", ["--in-parquet", f"{D}/hard_extra_k16_rollouts.parquet", "--out-parquet", f"{D}/hard_extra_k16_labeled.parquet", "--judge", "heuristic"]],
+            ["ziprc/probe_eval.py", ["--probe-set", f"{D}/hard_test16_labeled.parquet", "--extra-set", f"{D}/hard_extra_k16_labeled.parquet", "--probe-k", "2"]],
+        ]
+        return steps
     raise ValueError(f"unknown pipeline: {name}")
 
 
