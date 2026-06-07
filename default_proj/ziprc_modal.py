@@ -353,14 +353,18 @@ def _build_pipeline(name: str):
         # from the value_q25 probe, then generate a pool ONCE per prompt and replay the full
         # adaptive x prune 2x2 offline (faithful prune accounting from the value trajectories).
         Hh = f"{M}/lite_binary_hard"
+        # allocate_budget here only materializes a per-prompt metadata table (prompt/target/nums);
+        # blend_eval RE-allocates ONLINE from its own fresh probe, so there is no stale allocation.
         return [
             ["ziprc/allocate_budget.py", ["--scored", f"{D}/hard_test16_scored.parquet",
                                           "--out", f"{D}/alloc_blend.parquet", "--budget", "6",
                                           "--probe-k", "2", "--kmax", "8",
                                           "--signal-col", "value_q25", "--scheme", "frontier"]],
-            ["ziprc/blend_eval.py", ["--model", Hh, "--alloc", f"{D}/alloc_blend.parquet",
-                                     "--probe-k", "2", "--num-prompts", "120",
-                                     "--max-new-tokens", "512", "--out", f"{D}/blend_results.parquet"]],
+            ["ziprc/blend_eval.py", ["--model", Hh, "--prompts", f"{D}/alloc_blend.parquet",
+                                     "--probe-k", "2", "--pool-k", "8", "--budget", "6", "--kmax", "8",
+                                     "--scheme", "frontier", "--num-prompts", "120", "--max-new-tokens", "512",
+                                     "--prune-thresholds", "0.5", "0.4", "0.3",
+                                     "--out", f"{D}/blend_sweep.parquet"]],
         ]
     raise ValueError(f"unknown pipeline: {name}")
 

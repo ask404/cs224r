@@ -12,6 +12,31 @@ import numpy as np
 import pandas as pd
 
 
+def allocate(promise, solved, budget, probe_k, kmax, scheme="frontier"):
+    """Water-fill (budget-probe_k)*n EXTRA samples over UNSOLVED prompts, weighted by the
+    rank-normalized mid-trajectory signal (frontier: pr*(1-pr); promise: pr), capped at
+    kmax-probe_k per prompt. Returns integer n_extra per prompt. Shared by the offline
+    allocator (main) and the online blend (`blend_eval.py`) so both use identical logic."""
+    promise = np.asarray(promise, float)
+    solved = np.asarray(solved, bool)
+    n = len(promise)
+    pr = np.empty(n)
+    pr[np.argsort(promise)] = np.linspace(0, 1, n)              # rank-normalize the signal
+    w = pr * (1 - pr) if scheme == "frontier" else pr.copy()
+    w = np.where(solved, 0.0, w + 1e-6)                          # nothing for already-solved
+    extra_total = max(0, int(round((budget - probe_k) * n)))
+    cap = kmax - probe_k
+    K = np.zeros(n, dtype=int)
+    rem = extra_total
+    while rem > 0 and (w > 0).any():
+        avail = (K < cap) & (~solved) & (w > 0)
+        if not avail.any():
+            break
+        K[int(np.argmax(np.where(avail, w / (K + 1), -np.inf)))] += 1
+        rem -= 1
+    return K
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scored", required=True, help="Scored rollouts; first --probe-k per prompt are the probe.")
@@ -34,19 +59,8 @@ def main():
         meta.append((int(pi), r["prompt"], int(r["target"]), list(r["nums"]), r["ground_truth"]))
 
     n = len(meta)
-    promise = np.array(promise); solved = np.array(solved)
-    pr = np.empty(n); pr[np.argsort(promise)] = np.linspace(0, 1, n)  # rank-normalize the signal
-    w = pr * (1 - pr) if args.scheme == "frontier" else pr.copy()
-    w = np.where(solved, 0.0, w + 1e-6)                                # nothing for already-solved
-    extra_total = max(0, int(round((args.budget - args.probe_k) * n)))
-    cap = args.kmax - args.probe_k
-    K = np.zeros(n, dtype=int); rem = extra_total
-    while rem > 0 and (w > 0).any():
-        avail = (K < cap) & (~solved) & (w > 0)
-        if not avail.any():
-            break
-        K[int(np.argmax(np.where(avail, w / (K + 1), -np.inf)))] += 1
-        rem -= 1
+    K = allocate(promise, solved, args.budget, args.probe_k, args.kmax, args.scheme)
+    solved = np.asarray(solved, bool)
 
     rows = [{"prompt_idx": pi, "prompt": pr_, "target": t, "nums": nm, "ground_truth": gt, "n_extra": int(K[i])}
             for i, (pi, pr_, t, nm, gt) in enumerate(meta)]
