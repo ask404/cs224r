@@ -104,14 +104,19 @@ and true compute accounting (not the offline pool).
 
 | budget B | adaptive (probe + reallocate) | fixed@B | gain |
 |---|---|---|---|
+| 3 | 0.338 | 0.338 | +0.000 |
 | 4 | **0.371** | 0.346 | **+0.025** |
 | 6 | **0.371** | 0.354 | **+0.017** |
+| 8 | 0.358 | 0.354 | +0.004 |
 
 - **Online beats fixed-K at matched budget**, by *more* than the offline proxy (+0.025 vs
   +0.015 at B=4) — the online version isn't capped at a fixed pool of 8.
-- **The gain is largest at LOW budget** (the practically relevant regime): adaptive allocation
-  matters most when samples are scarce; fixed catches up as budget grows (everyone eventually
-  gets enough).
+- **The gain is an inverted-U in budget, governed by the cap (`kmax`) — not the budget itself.**
+  At **B=3** there's too little to reallocate (~1 extra/prompt → adaptive ≈ fixed, **+0.000**); it
+  peaks at **B=4 (+0.025)**; then *collapses* at **B=8 (+0.004)** — not because budget is wasted but
+  because the budget approaches the cap (`kmax=8`; mean cost 6.08, every unsolved prompt maxed out),
+  leaving adaptive **no room to concentrate**. §2d shows that *raising the cap* rescues the
+  high-budget gain — so the governing lever is **cap headroom (`kmax − meanK`)**, not budget.
 - **Adaptive plateaus at 0.371** because of the hopeless tail (tiers 5–6, 0% solvable — no
   allocation helps); the action is the tier-4 frontier. **32% of prompts were solved by the
   2-sample probe and got zero extra**, freeing that budget for the frontier.
@@ -119,7 +124,41 @@ and true compute accounting (not the offline pool).
   are disjoint from the evaluated extras by construction.
 
 **Bottom line:** mid-trajectory adaptive-K works end-to-end on a task where start-based
-allocation cannot, and the efficiency win concentrates at low budgets — where it matters.
+allocation cannot, and the efficiency win is real wherever the budget leaves the cap **headroom
+to concentrate** (§2d) — not at any one magic budget.
+
+---
+
+## 2d. The governing lever is cap headroom, not budget (`allocate_budget.py --kmax` sweep)
+
+The B-curve above hides a confound: budget `B` and cap `kmax=8` move together, so "the gain
+dies at B=8" could be *budget saturation* or *cap saturation*. We separated them with a clean,
+**same-pool, 24-seed** offline sweep (`adaptive_k_mid` on the fresh 16-sample pool, so the cap
+can range up to 16 without re-confounding generation). Gain over fixed at matched mean budget:
+
+| mean budget | `kmax=8` (cap binds) | `kmax=16` (headroom) |
+|---|---|---|
+| 4 | frontier +0.008 / promise +0.015 | +0.008 / +0.015 |
+| 6 | +0.009 / +0.010 | +0.011 / **+0.015** |
+| 8 | **+0.000 / +0.000**  ← saturated | **+0.012 / +0.016**  ← rescued |
+
+- **Cap headroom — not budget — governs the gain.** At `meanK=8` the gain vanishes *only* when
+  `kmax=8` (no prompt can exceed the cap → adaptive collapses to uniform). Raise the cap to 16 and
+  the same budget keeps **+0.012–0.016**. Keep `kmax > meanK` and the gain persists at *any* budget.
+- **This corrects an earlier confounded single run** (a fresh-pool `kmax=16` point read +0.004 and
+  briefly suggested "raising the cap doesn't help / over-concentration hurts"). The clean
+  multi-seed test refutes that: at matched budget, **more cap headroom strictly ≥ less** — the
+  +0.004 was generation noise, not a real over-concentration penalty.
+- **`promise` ≥ `frontier` on this hard pool** (+0.015–0.016 vs +0.008–0.012): when the tail is
+  mostly hopeless, concentrating on the *highest-promise* unsolved prompts beats hedging the
+  50/50 boundary. (On an easier pool with a flippable middle, `frontier` should win — worth a sweep.)
+- **Offline gains (+0.008–0.016) < online (+0.017–0.025)** because offline redraws extras from a
+  fixed 16-pool (limited diversity, averaged over seeds), while online generates *fresh* extras.
+  Offline is the conservative, low-variance estimate; both agree on the cap-headroom mechanism.
+
+**Bottom line (§2d):** to *preserve* the adaptive-K gain as you scale budget, raise the **cap**
+(`kmax`), not the budget — give the frontier room to absorb samples. The original "raise kmax"
+intuition was right; the clean experiment was needed to see past the single-run noise.
 
 ---
 
@@ -175,6 +214,49 @@ adaptive-K). Related work to build on:
 allocation (adaptive-K) *plus* mid-trajectory prune/early-stop — driven by one zero-overhead
 ZIP-RC signal, and benchmarked on a **wide-difficulty** suite where the prompt-difficulty
 signal has room to act. That directly addresses the Countdown null on both fronts.
+
+### 4b. Blending all three levers — composability, risks, and a staged plan
+
+The three meta-actions act on **orthogonal axes**, so a blend should make the savings *compound*
+(multiplicative), not merely add:
+
+| lever | axis | scope | decision |
+|---|---|---|---|
+| **adaptive-K** | budget | *across* prompts | how many whole samples this prompt gets |
+| **prune** | compute | *within* a sample | kill this token-stream mid-generation |
+| **earlystop** | latency | *within* a prompt | commit to a confident sample, stop the rest |
+
+**What can go wrong** (all read the *same* head, so errors are *not* independent):
+1. **Correlated failure.** Where the head is miscalibrated they fail *together* — e.g. the OOD
+   `value_first` collapse (AUC 0.237) would mis-allocate *and* mis-prune *and* mis-commit on
+   exactly the hard prompts. Design it out by **read-point per lever** (allocate on `value_q25`+,
+   never `value_first`; prune on per-step value).
+2. **Levers fight.** adaptive-K *invests* extra samples in an uncertain prompt; prune then *kills*
+   them; earlystop *commits* before they pay off. The §2d **cap-saturation** result is the baby
+   version: spending more in one place has diminishing returns.
+3. **Budget-unit mismatch.** adaptive-K allocates *samples*; prune/earlystop change the *token cost*
+   per sample — so "6 samples" stops being fixed compute. Correct allocation needs **per-sample
+   length prediction → the length head, our weakest component.** This is the gating dependency.
+4. **Premature commitment on the frontier.** earlystop commits on confidence, but adaptive-K sends
+   extras to *uncertain* prompts — a confident-but-wrong sample gets committed, defeating the spend.
+5. **Objective conflict.** prune optimizes tokens, earlystop optimizes wall-clock; without **one**
+   utility they pull apart. **Evaluation illusion:** mean accuracy can hold while the *frontier*
+   slice degrades — needs slice-wise CLEAR accounting.
+
+**Best implementation — one utility, staged rollout.** Lift ZIP-RC's sampling utility to the batch:
+maximize **U = E[max reward] − β·(α·compute + (1−α)·latency)** with all three meta-actions read off
+the *same* joint (reward, length) prediction (this is Direction C in `AGENT_DIRECTIONS.md`). Stage it:
+1. **Compose the two compute-axis levers first** (adaptive-K + prune) — they *align* (both avoid
+   wasting compute on doomed work), least conflict; prove savings compound.
+2. **Couple within-prompt aggressiveness to the allocation:** frontier prompts (high `n_extra`) get
+   *conservative* prune/earlystop thresholds (protect the exploration adaptive-K paid for);
+   solved/hopeless prompts get *aggressive* prune (reclaim compute). Now the levers *cooperate*.
+3. **Allocate in compute units, not samples** — requires hardening the length head first (or feed
+   back *realized* length as a running estimate).
+4. **Only then add earlystop** under the unified α-utility; validate on held-out + seeds + slice-wise.
+
+**Net:** blend **adaptive-K + prune now** (aligned, calibrated region); **gate earlystop on
+hardening the length head** (the compute-vs-latency trade needs trustworthy cost prediction).
 
 ---
 
