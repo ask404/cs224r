@@ -8,6 +8,18 @@ Adapted from the official repo: https://github.com/rohinmanvi/ZIP-RC
 the upstream repo ships no LICENSE file — used here for a class project with
 attribution; cite the paper).
 
+## Findings & writeups
+- **[`BLEND_STUDY.md`](BLEND_STUDY.md)** — *flagship.* Blending adaptive-K + prune into a
+  test-time controller, with a full rigor layer (prompt bootstrap, held-out τ selection,
+  difficulty-controlled partial correlation, leakage + faithfulness audits). Honest headline:
+  ~20–25% compute saving at neutral accuracy; savings super-compound; prune-safety is governed by
+  mid-trajectory separability (set by the *problem* more than the head).
+- **[`ADAPTIVE_K.md`](ADAPTIVE_K.md)** — the adaptive-K arc (start-based fails → mid-trajectory
+  works → cap-headroom governs the gain), and the first blend sketch (§4c).
+- **[`FINDINGS.md`](FINDINGS.md)**, **[`CROSS_POLICY.md`](CROSS_POLICY.md)**,
+  **[`EXPERIMENT_difficulty.md`](EXPERIMENT_difficulty.md)** — calibration, cross-policy transfer,
+  difficulty stratification.
+
 ## Pipeline (each stage persists to the Modal volume; stages are isolated)
 
 ```
