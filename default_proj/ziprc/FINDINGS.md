@@ -89,17 +89,40 @@ The RLOO-trained head scores SFT rollouts at 0.865 (≈ matched 0.867); the SFT 
 RLOO rollouts at 0.890 (vs 0.922). The head learns a **transferable** "will this succeed"
 signal.
 
-### ⑥ Adaptive-K = null
-On the scaled head, the small earlier gain didn't replicate — Countdown's narrow `value_first`
-difficulty range leaves little to reallocate.
+### ⑥ Adaptive-K = null (start-based) → works (mid-trajectory)
+On the scaled head, the start-based (`value_first`) gain didn't replicate — Countdown's narrow
+*a-priori* difficulty range leaves little to reallocate. But moving the probe to **mid-trajectory**
+(`value_q25`) and skipping probe-solved prompts makes it work (cap-headroom governs the gain). See
+`ADAPTIVE_K.md`.
+
+### ⑦ The blend (adaptive-K × prune) — rigorous study, honest result (`BLEND_STUDY.md`)
+Blending the across-prompt allocator with within-sample pruning, under a full rigor layer
+(prompt-level bootstrap CIs, held-out τ selection, difficulty-controlled partial correlation, plus
+leakage + faithfulness audits). What survives proper inference:
+- **~20–25% compute saving at *neutral* accuracy** (held-out, all 4 pools) — a real efficiency gain,
+  **not** the free lunch the single-run suggested (that was winner's-curse over a 4×5 grid).
+- **The savings *super-compound*** — the blend beats the product-of-levers by up to +19pp, because
+  **prune is *more* effective under adaptive allocation** (it concentrates samples where the losers
+  are). "Allocation-agnostic" is *rejected* (every CI > 0).
+- **Pruning acts at mid-AUC ≈0.6–0.7** — far below the 0.91 value-*end* AUC — so even calibrated
+  pools pay some accuracy. Separability governs prune-safety as a **within-pool** tendency
+  (higher-AUC tier prunes safer, 2/2 calibrated pools); the **cross-pool law is weak/not significant**
+  (partial r=0.35, p=0.36) — *the rigor caught my own optimism* (an earlier p=0.03 leaned on a
+  non-independent pool).
+- **The bottleneck is the *problem*, not the head:** a head-swap that lowered calibration at *fixed*
+  difficulty (same samples) did **not** change prune-safety — hard Countdown is mid-opaque for every
+  head. The single-run "accuracy synergy" also did not survive (DiD CIs include 0).
 
 ---
 
 ## 4. Honest caveats
-- **Held-out is 50 prompts** (the test split's full size) — multi-seed error bars
-  compensate; a bigger set would need carving from train.
-- **Length head is weak** (E[remaining] MAE ≈ 257 tokens) — the *reward* half of the joint
-  is well-calibrated, the *length* half isn't.
+- **The official test split is 50 prompts.** The blend study addresses this with a **leakage-safe
+  n=300 head-clean pool** (a train slice deduped by `(target, sorted nums)` against the head's
+  training problems) + prompt-level bootstrap CIs scoped "on these prompts."
+- **The cross-pool calibration law is weak** (partial r≈0.35, p≈0.36) — a real within-pool tendency,
+  not yet a clean predictive law at this scale.
+- **Length head is weak** (E[remaining] MAE ≈ 257 tokens) — the *reward* half of the joint is
+  well-calibrated, the *length* half isn't; this gates the latency lever.
 - **Single task / single base model** — findings are Countdown / Qwen2.5-0.5B specific.
 
 ---
@@ -110,15 +133,18 @@ difficulty range leaves little to reallocate.
 - **`ziprc_results/figures_scaled/`** — calibration, selection, compute Pareto, latency
   Pareto, multi-seed error-bar Pareto, adaptive-K
 - **`ziprc_results/*.json`** — raw metrics (TV calibration, aggregates)
+- **`ziprc/BLEND_STUDY.md`** + `figures/blend_study.png` + `results/law_*.parquet` — the rigorous
+  blend study (prompt-bootstrap, held-out, partial correlation).
 - **PR #1** — the reviewable extension diff
-- **Total compute spend: ~$25 of the $400 Modal budget.**
+- **Total compute spend: ~$130 of the $400 Modal budget** (most of it the blend study's 5 runs).
 
 ---
 
 ## 6. One-line summary
 
-A complete, validated, scaled, and externally-validated ZIP-RC-Lite implementation: one
-solid positive (adaptive compute saves ~63% compute or ~48% latency), one honest negative
-(structured verifier is policy-capability-dependent), one bonus generalization result
-(cross-policy transfer), and an engineering trail documenting every bug and the validation
-discipline that caught it.
+A complete, validated, scaled, externally-validated ZIP-RC-Lite implementation: adaptive compute
+saves ~63% compute or ~48% latency; the **blend** (adaptive-K × prune) super-compounds into a
+**rigorously-verified ~20–25% compute saving at neutral accuracy** (prompt-bootstrap, held-out, two
+clean audits) — *not* the free lunch the single-run suggested; one honest negative (structured
+verifier is capability-dependent); one bonus (cross-policy transfer); and an engineering + statistics
+trail where the rigor repeatedly **caught its own optimism**.

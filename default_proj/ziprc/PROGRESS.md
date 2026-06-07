@@ -11,6 +11,15 @@ from ~20 unused vocabulary logits at zero inference overhead, plus a **live adap
 parallel decoder** that uses those predictions to allocate test-time compute. The core
 result holds out-of-sample, and the cost–accuracy Pareto frontier is complete.
 
+**Follow-on — the blend study (`BLEND_STUDY.md`).** We blended the across-prompt allocator
+(adaptive-K) with within-sample pruning and subjected it to a full rigor layer — prompt-level
+bootstrap CIs, held-out operating-point selection, a difficulty-controlled partial correlation, and
+two independent adversarial audits (leakage + faithfulness, both clean). Honest result: a **robust
+~20–25% compute saving at neutral accuracy** whose savings **super-compound**; prune-safety is
+governed by *mid-trajectory* separability (≈0.6–0.7 AUC, far below the 0.91 value-end AUC) as a
+within-pool tendency. The rigor repeatedly **corrected the optimistic single-run claims** (the
+"Pareto free lunch" was winner's-curse; the "accuracy synergy" didn't survive).
+
 ## What was built (`ziprc/`)
 
 A six-stage Modal pipeline, all validated:

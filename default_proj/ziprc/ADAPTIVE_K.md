@@ -327,30 +327,30 @@ Three reads, refining §4c:
 | **main pool** (AUC 0.91) | ✅ yes — Pareto at τ=0.4 | ✅ +0.10 (62% probe-solved → concentrate) |
 | **hard pool** (OOD-ish) | ❌ no — τ-invariant hit | ✅ +0.01–0.03 (30% probe-solved) |
 
-**Bottom line (§4c):** adaptive-K + prune is the right first blend — savings **compound**, the
-levers are **synergistic on accuracy**, and on a **calibrated** pool the blend reaches genuine
-**Pareto-dominance** (−22% compute at ≥ baseline oracle, τ=0.4, n=50 preliminary). The single
-requirement is a head whose *mid-trajectory* value cleanly separates winners from losers — on
-Countdown-hard it doesn't (losers look confidently doomed yet some are correct), which is the
-calibration unlock §4b's staged plan targets. Net across pools: the blend works wherever the head
-is calibrated *and* the difficulty mix lets allocation act.
-
-> **The §4c numbers above are single-run/preliminary.** The full, leakage-audited, multi-seed
-> study — prompt-bootstrap CIs, held-out τ selection, a calibration *law* tested by partial
-> correlation (controlling difficulty) + a same-difficulty/different-head causal decoupler — is in
-> **[`BLEND_STUDY.md`](BLEND_STUDY.md)**. That is the canonical writeup; §4c is the first sketch.
+**Bottom line (§4c — preliminary; superseded by the rigorous study):** adaptive-K + prune is the
+right first blend, and the savings **compound**. The single-run also suggested an *accuracy synergy*
+and a *Pareto-dominance* (−22% compute at ≥ baseline oracle, τ=0.4, n=50) — **but neither survived
+proper inference.** Under prompt-level bootstrap + held-out τ selection (`BLEND_STUDY.md`), the
+"Pareto win" is **winner's-curse** (held-out oracle-delta CI straddles 0) and the accuracy synergy's
+DiD CIs include 0. What holds rigorously: a **~20–25% compute saving at *neutral* accuracy**, savings
+that **super-compound**, and prune-safety governed by mid-trajectory separability as a *within-pool*
+tendency (the clean cross-pool law is **not** established). Read **[`BLEND_STUDY.md`](BLEND_STUDY.md)**
+for the audited, bootstrapped numbers — it is canonical; this §4c is the first sketch.
 
 ---
 
 ## 5. One-paragraph summary
 
-Adaptive sample allocation by the head's predicted difficulty is **null on Countdown** — a
-small gain on the 256-prompt head did not replicate on the scaled head — and the figure shows
-the allocation curves overlapping. The cause is the task's **narrow difficulty spread**, not
-the mechanism, which makes the follow-on clear: re-test on **wide-difficulty, difficulty-labeled
-math benchmarks** (Omni-MATH, MATH levels, olympiad sets) where the signal has room to act,
-and fold the one-shot allocation into a **mid-trajectory** controller using the per-step value
-trajectory, building on the adaptive-compute / early-exit literature above.
+*Start-based* adaptive allocation (`value_first`) is **null on Countdown** — the small 256-prompt
+gain didn't replicate on the scaled head, because the task's a-priori difficulty spread is narrow
+(the model senses "I'm failing" mid-trajectory but not "I can't do this" up front). Moving the probe
+**mid-trajectory** (`value_q25`, skip probe-solved) makes it work, and **cap headroom — not budget —
+governs the gain** (§2d). Folding it together with within-sample **prune** gives the blend
+(`BLEND_STUDY.md`): under prompt-level bootstrap + held-out inference, the savings **super-compound**
+into a **~20–25% compute saving at neutral accuracy** (a real efficiency gain, not the free lunch the
+single-run suggested), with prune-safety governed by *mid-trajectory* separability as a within-pool
+tendency. The natural follow-on remains a **wide-difficulty, difficulty-labeled** suite (Omni-MATH,
+MATH levels) where both the allocation signal and the separability gradient have more room to act.
 
 ## Sources
 - Omni-MATH — https://arxiv.org/abs/2410.07985 · AMO-Bench — https://arxiv.org/abs/2510.26768 ·
