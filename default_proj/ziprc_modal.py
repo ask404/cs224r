@@ -409,6 +409,27 @@ def _build_pipeline(name: str):
             ["ziprc/blend_stats.py", ["--dump", f"{D}/blend_holdout_dump.parquet", "--name", "holdout",
                                       "--out-law", f"{D}/law_holdout.parquet"]],
         ]
+
+    if name == "blend_cross":
+        # DECOUPLE calibration from difficulty (the audit's #1 confound). The value head is
+        # head-only-trained on a FROZEN backbone and the reserved logits are masked before
+        # sampling -> generation is head-independent. So running the SAME hard pool with the OOD
+        # head lite_binary_512 (trained on easy Countdown) gives IDENTICAL samples but a different,
+        # worse-calibrated value signal. Comparing to the in-domain `blend` (lite_binary_hard) run
+        # varies mid-trajectory calibration at FIXED difficulty + fixed samples -> isolates the law.
+        H = f"{M}/lite_binary_512"
+        return [
+            ["ziprc/blend_eval.py", ["--model", H, "--prompts", f"{D}/alloc_blend.parquet",
+                                     "--probe-k", "2", "--pool-k", "8", "--kmax", "8", "--scheme", "frontier",
+                                     "--num-prompts", "120", "--max-new-tokens", "512",
+                                     "--budgets", "3", "4", "6", "8",
+                                     "--prune-thresholds", "0.3", "0.4", "0.5", "0.6", "0.7",
+                                     "--seeds", "0", "1", "2", "--out", f"{D}/blend_cross_sweep.parquet",
+                                     "--out-tier", f"{D}/blend_cross_tier.parquet",
+                                     "--dump-samples", f"{D}/blend_cross_dump.parquet"]],
+            ["ziprc/blend_stats.py", ["--dump", f"{D}/blend_cross_dump.parquet", "--name", "hard_oodhead",
+                                      "--out-law", f"{D}/law_cross.parquet"]],
+        ]
     raise ValueError(f"unknown pipeline: {name}")
 
 
