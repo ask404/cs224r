@@ -94,7 +94,7 @@ def main():
         include_stop_str_in_output=True,
     )
 
-    print(f"[gen] {n} prompts x {args.samples_per_prompt} samples from {args.model}", flush=True)
+    print(f"[gen] {len(prompts)} prompts x {args.samples_per_prompt} samples from {args.model}", flush=True)
     outputs = llm.generate(prompts, sampling)
 
     rows = []
