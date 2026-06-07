@@ -40,6 +40,8 @@ def parse_args():
                    help="Policy checkpoint to roll out (HF repo or local path).")
     p.add_argument("--tokenizer", default=None, help="Defaults to --model.")
     p.add_argument("--dataset", default="asingh15/countdown_tasks_3to4")
+    p.add_argument("--from-parquet", default=None,
+                   help="Read prompts from a local/volume parquet (prompt,target,nums) instead of --dataset.")
     p.add_argument("--split", default="train")
     p.add_argument("--out", required=True)
     p.add_argument("--max-num-prompts", type=int, default=200)
@@ -61,14 +63,18 @@ def main():
     tok_name = args.tokenizer or args.model
     tokenizer = AutoTokenizer.from_pretrained(tok_name)
 
-    ds = load_dataset(args.dataset, split=args.split)
-    n = min(args.max_num_prompts, len(ds))
-    ds = ds.select(range(n))
-
-    prompts = list(ds["prompt"])
-    # Countdown eval schema: target + nums. Fall back to ground_truth if present.
-    targets = list(ds["target"]) if "target" in ds.column_names else [g["target"] for g in ds["ground_truth"]]
-    nums = list(ds["nums"]) if "nums" in ds.column_names else [g["numbers"] for g in ds["ground_truth"]]
+    if args.from_parquet:
+        df = pd.read_parquet(args.from_parquet).iloc[: args.max_num_prompts]
+        prompts = list(df["prompt"])
+        targets = list(df["target"])
+        nums = list(df["nums"])
+    else:
+        ds = load_dataset(args.dataset, split=args.split)
+        ds = ds.select(range(min(args.max_num_prompts, len(ds))))
+        prompts = list(ds["prompt"])
+        # Countdown eval schema: target + nums. Fall back to ground_truth if present.
+        targets = list(ds["target"]) if "target" in ds.column_names else [g["target"] for g in ds["ground_truth"]]
+        nums = list(ds["nums"]) if "nums" in ds.column_names else [g["numbers"] for g in ds["ground_truth"]]
 
     llm = LLM(
         model=args.model,

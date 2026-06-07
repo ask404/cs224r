@@ -149,6 +149,10 @@ def run_calib_tv(a): return _run("ziprc/calibration_tv.py", a)
 def run_gen_hard(a): return _run("ziprc/make_countdown_hard.py", a)
 
 
+@_cpu_fn
+def run_difficulty(a): return _run("ziprc/difficulty_analysis.py", a)
+
+
 # Long-running multi-stage pipeline that runs ENTIRELY in one remote container, so the
 # sequence survives the local client disconnecting (e.g. laptop sleep). Launch with
 # `modal run --detach`. Each step commits the volume, so partial progress is preserved.
@@ -254,6 +258,31 @@ def _build_pipeline(name: str):
             ["ziprc/calibration_tv.py", ["--model", H, "--in-parquet", f"{D}/k64_labeled.parquet", "--reward-values", "0.0", "1.0",
                                          "--min-k", "32", "--out-json", f"{D}/calib_tv.json"]],
         ]
+    if name == "difficulty":
+        Hh = f"{M}/lite_binary_hard"
+        return [
+            # build a WIDE-difficulty Countdown set (operand cardinality 3-6) on the volume
+            ["ziprc/make_countdown_hard.py", ["--out", f"{D}/hard_train.parquet", "--difficulties", "3", "4", "5", "6",
+                                              "--n-per-difficulty", "200", "--seed", "0"]],
+            ["ziprc/make_countdown_hard.py", ["--out", f"{D}/hard_test.parquet", "--difficulties", "3", "4", "5", "6",
+                                              "--n-per-difficulty", "60", "--seed", "1"]],
+            # rollouts (read the generated parquets directly; no HF round-trip)
+            ["ziprc/gen_rollouts.py", ["--model", _POLICY, "--from-parquet", f"{D}/hard_train.parquet",
+                                       "--out", f"{D}/hard_train_rollouts.parquet", "--max-num-prompts", "800", "--samples-per-prompt", "4"]],
+            ["ziprc/gen_rollouts.py", ["--model", _POLICY, "--from-parquet", f"{D}/hard_test.parquet",
+                                       "--out", f"{D}/hard_test_rollouts.parquet", "--max-num-prompts", "240", "--samples-per-prompt", "8"]],
+            ["ziprc/label_rollouts.py", ["--in-parquet", f"{D}/hard_train_rollouts.parquet", "--out-parquet", f"{D}/hard_train_labeled.parquet", "--judge", "heuristic"]],
+            ["ziprc/label_rollouts.py", ["--in-parquet", f"{D}/hard_test_rollouts.parquet", "--out-parquet", f"{D}/hard_test_labeled.parquet", "--judge", "heuristic"]],
+            ["ziprc/train_head_only.py", ["--model-id", _POLICY, "--data-path", f"{D}/hard_train_labeled.parquet",
+                                          "--weights-path", Hh, "--label-column", "correct", "--reward-values", "0.0", "1.0",
+                                          "--batch-size", "16", "--gradient-accumulation-steps", "2", "--num-epochs", "3"]],
+            ["ziprc/score_joint_head.py", ["--model", Hh, "--in-parquet", f"{D}/hard_test_labeled.parquet",
+                                           "--out-parquet", f"{D}/hard_test_scored.parquet", "--reward-values", "0.0", "1.0"]],
+            ["ziprc/difficulty_analysis.py", ["--scored", f"{D}/hard_test_scored.parquet", "--out-json", f"{D}/difficulty_analysis.json"]],
+            ["ziprc/adaptive_k.py", ["--scored", f"{D}/hard_test_scored.parquet", "--budgets", "2", "3", "4", "5", "6",
+                                     "--kmax", "8", "--trials", "16", "--out-json", f"{D}/adaptive_k_hard.json"]],
+            ["ziprc/value_select.py", ["--in-parquet", f"{D}/hard_test_scored.parquet", "--ks", "1", "2", "4", "8"]],
+        ]
     raise ValueError(f"unknown pipeline: {name}")
 
 
@@ -271,12 +300,13 @@ def main(*raw):
         return
     parser = argparse.ArgumentParser()
     parser.add_argument("stage", choices=("gen", "label", "train", "score", "select", "decode",
-                                          "figures", "adaptive_k", "aggregate", "calib_tv", "gen_hard"))
+                                          "figures", "adaptive_k", "aggregate", "calib_tv",
+                                          "gen_hard", "difficulty"))
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     ns = parser.parse_args(raw)
     a = ns.rest[1:] if ns.rest[:1] == ["--"] else ns.rest
     fn = {"gen": run_gen, "label": run_label, "train": run_train, "score": run_score,
           "select": run_select, "decode": run_decode, "figures": run_figures,
           "adaptive_k": run_adaptive_k, "aggregate": run_aggregate, "calib_tv": run_calib_tv,
-          "gen_hard": run_gen_hard}[ns.stage]
+          "gen_hard": run_gen_hard, "difficulty": run_difficulty}[ns.stage]
     print(fn.remote(a))
