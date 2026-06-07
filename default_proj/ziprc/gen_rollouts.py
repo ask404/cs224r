@@ -48,6 +48,9 @@ def parse_args():
     p.add_argument("--split", default="train")
     p.add_argument("--out", required=True)
     p.add_argument("--max-num-prompts", type=int, default=200)
+    p.add_argument("--prompt-offset", type=int, default=0,
+                   help="Start index into the split (for leakage-safe held-out slices disjoint "
+                        "from the head's training prompts).")
     p.add_argument("--samples-per-prompt", type=int, default=4)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--top-p", type=float, default=1.0)
@@ -80,12 +83,14 @@ def main():
             n_list = [max(1, int(x)) for x in df[args.n_col]]
     else:
         ds = load_dataset(args.dataset, split=args.split)
-        ds = ds.select(range(min(args.max_num_prompts, len(ds))))
+        off = max(0, int(args.prompt_offset))
+        end = min(off + args.max_num_prompts, len(ds))
+        ds = ds.select(range(off, end))           # [off, end): held-out slices are leakage-safe
         prompts = list(ds["prompt"])
         # Countdown eval schema: target + nums. Fall back to ground_truth if present.
         targets = list(ds["target"]) if "target" in ds.column_names else [g["target"] for g in ds["ground_truth"]]
         nums = list(ds["nums"]) if "nums" in ds.column_names else [g["numbers"] for g in ds["ground_truth"]]
-        pidx = list(range(len(prompts)))
+        pidx = list(range(off, end))              # keep absolute indices so disjointness is auditable
 
     llm = LLM(
         model=args.model,

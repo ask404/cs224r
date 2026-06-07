@@ -361,10 +361,11 @@ def _build_pipeline(name: str):
                                           "--probe-k", "2", "--kmax", "8",
                                           "--signal-col", "value_q25", "--scheme", "frontier"]],
             ["ziprc/blend_eval.py", ["--model", Hh, "--prompts", f"{D}/alloc_blend.parquet",
-                                     "--probe-k", "2", "--pool-k", "8", "--budget", "6", "--kmax", "8",
+                                     "--probe-k", "2", "--pool-k", "8", "--kmax", "8",
                                      "--scheme", "frontier", "--num-prompts", "120", "--max-new-tokens", "512",
-                                     "--prune-thresholds", "0.5", "0.4", "0.3",
-                                     "--out", f"{D}/blend_sweep.parquet"]],
+                                     "--budgets", "3", "4", "6", "8",
+                                     "--prune-thresholds", "0.3", "0.4", "0.5", "0.6", "0.7",
+                                     "--seeds", "0", "1", "2", "--out", f"{D}/blend_hard_sweep.parquet"]],
         ]
 
     if name == "blend_main":
@@ -374,11 +375,30 @@ def _build_pipeline(name: str):
         H = f"{M}/lite_binary_512"
         return [
             ["ziprc/blend_eval.py", ["--model", H, "--prompts", f"{D}/test_scored_256.parquet",
-                                     "--probe-k", "2", "--pool-k", "8", "--budget", "6", "--kmax", "8",
+                                     "--probe-k", "2", "--pool-k", "8", "--kmax", "8",
                                      "--scheme", "frontier", "--num-prompts", "50", "--max-new-tokens", "512",
-                                     "--prune-thresholds", "0.5", "0.4", "0.3",
+                                     "--budgets", "3", "4", "6", "8",
+                                     "--prune-thresholds", "0.3", "0.4", "0.5", "0.6", "0.7",
                                      "--seeds", "0", "1", "2", "3", "4", "5",
                                      "--out", f"{D}/blend_main_sweep.parquet"]],
+        ]
+
+    if name == "blend_holdout":
+        # Large LEAKAGE-SAFE pool: a train slice deduped (by target+sorted nums) against the
+        # head's training problems (train[0:512]) -> head-clean, n=300 -> firms the main-pool
+        # Pareto claim with real statistics. Head-disjoint is the requirement for the calibration
+        # claim; policy-seen is reported transparently (base solve-rate optimistic, mechanism valid).
+        H = f"{M}/lite_binary_512"
+        return [
+            ["ziprc/make_holdout.py", ["--split", "train", "--offset", "200000", "--n-candidates", "1500",
+                                       "--n-keep", "300", "--exclude-parquet", f"{D}/train_labeled_512.parquet",
+                                       "--out", f"{D}/holdout300.parquet"]],
+            ["ziprc/blend_eval.py", ["--model", H, "--prompts", f"{D}/holdout300.parquet",
+                                     "--probe-k", "2", "--pool-k", "8", "--kmax", "8", "--scheme", "frontier",
+                                     "--num-prompts", "300", "--max-new-tokens", "512",
+                                     "--budgets", "3", "4", "6", "8",
+                                     "--prune-thresholds", "0.3", "0.4", "0.5", "0.6", "0.7",
+                                     "--seeds", "0", "1", "--out", f"{D}/blend_holdout_sweep.parquet"]],
         ]
     raise ValueError(f"unknown pipeline: {name}")
 
