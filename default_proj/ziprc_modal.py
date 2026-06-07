@@ -157,6 +157,18 @@ def run_difficulty(a): return _run("ziprc/difficulty_analysis.py", a)
 def run_adaptive_k_mid(a): return _run("ziprc/adaptive_k_mid.py", a)
 
 
+@_cpu_fn
+def run_leakage(a): return _run("ziprc/leakage_check.py", a)
+
+
+@_cpu_fn
+def run_allocate(a): return _run("ziprc/allocate_budget.py", a)
+
+
+@_cpu_fn
+def run_probe_eval(a): return _run("ziprc/probe_eval.py", a)
+
+
 # Long-running multi-stage pipeline that runs ENTIRELY in one remote container, so the
 # sequence survives the local client disconnecting (e.g. laptop sleep). Launch with
 # `modal run --detach`. Each step commits the volume, so partial progress is preserved.
@@ -269,7 +281,8 @@ def _build_pipeline(name: str):
             ["ziprc/make_countdown_hard.py", ["--out", f"{D}/hard_train.parquet", "--difficulties", "3", "4", "5", "6",
                                               "--n-per-difficulty", "200", "--seed", "0"]],
             ["ziprc/make_countdown_hard.py", ["--out", f"{D}/hard_test.parquet", "--difficulties", "3", "4", "5", "6",
-                                              "--n-per-difficulty", "60", "--seed", "1"]],
+                                              "--n-per-difficulty", "60", "--seed", "1",
+                                              "--exclude-parquet", f"{D}/hard_train.parquet"]],
             # rollouts (read the generated parquets directly; no HF round-trip)
             ["ziprc/gen_rollouts.py", ["--model", _POLICY, "--from-parquet", f"{D}/hard_train.parquet",
                                        "--out", f"{D}/hard_train_rollouts.parquet", "--max-num-prompts", "800", "--samples-per-prompt", "4"]],
@@ -287,6 +300,23 @@ def _build_pipeline(name: str):
                                      "--kmax", "8", "--trials", "16", "--out-json", f"{D}/adaptive_k_hard.json"]],
             ["ziprc/value_select.py", ["--in-parquet", f"{D}/hard_test_scored.parquet", "--ks", "1", "2", "4", "8"]],
         ]
+    if name == "probe_realloc":
+        # ONLINE probe-and-reallocate on the hard set: reuse the existing 8-sample
+        # hard_test_scored/labeled (probe = first 2, fixed-K pool = all 8); generate only
+        # FRESH extras per the mid-trajectory allocation; compare vs fixed-K at matched budget.
+        steps = []
+        for B in (4, 6):
+            steps += [
+                ["ziprc/allocate_budget.py", ["--scored", f"{D}/hard_test_scored.parquet", "--out", f"{D}/alloc_b{B}.parquet",
+                                              "--budget", str(B), "--probe-k", "2", "--kmax", "8", "--scheme", "frontier"]],
+                ["ziprc/gen_rollouts.py", ["--model", _POLICY, "--from-parquet", f"{D}/alloc_b{B}.parquet", "--n-col", "n_extra",
+                                           "--out", f"{D}/hard_extra_b{B}_rollouts.parquet", "--max-num-prompts", "400"]],
+                ["ziprc/label_rollouts.py", ["--in-parquet", f"{D}/hard_extra_b{B}_rollouts.parquet",
+                                             "--out-parquet", f"{D}/hard_extra_b{B}_labeled.parquet", "--judge", "heuristic"]],
+                ["ziprc/probe_eval.py", ["--probe-set", f"{D}/hard_test_labeled.parquet",
+                                         "--extra-set", f"{D}/hard_extra_b{B}_labeled.parquet", "--probe-k", "2"]],
+            ]
+        return steps
     raise ValueError(f"unknown pipeline: {name}")
 
 
@@ -305,7 +335,7 @@ def main(*raw):
     parser = argparse.ArgumentParser()
     parser.add_argument("stage", choices=("gen", "label", "train", "score", "select", "decode",
                                           "figures", "adaptive_k", "aggregate", "calib_tv",
-                                          "gen_hard", "difficulty", "adaptive_k_mid"))
+                                          "gen_hard", "difficulty", "adaptive_k_mid", "leakage", "allocate", "probe_eval"))
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     ns = parser.parse_args(raw)
     a = ns.rest[1:] if ns.rest[:1] == ["--"] else ns.rest
@@ -313,5 +343,5 @@ def main(*raw):
           "select": run_select, "decode": run_decode, "figures": run_figures,
           "adaptive_k": run_adaptive_k, "aggregate": run_aggregate, "calib_tv": run_calib_tv,
           "gen_hard": run_gen_hard, "difficulty": run_difficulty,
-          "adaptive_k_mid": run_adaptive_k_mid}[ns.stage]
+          "adaptive_k_mid": run_adaptive_k_mid, "leakage": run_leakage, "allocate": run_allocate, "probe_eval": run_probe_eval}[ns.stage]
     print(fn.remote(a))

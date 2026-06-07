@@ -94,20 +94,36 @@ def main():
     ap.add_argument("--n-per-difficulty", type=int, default=150)
     ap.add_argument("--num-range", type=int, default=20)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--exclude-parquet", default=None,
+                    help="Parquet whose problems to EXCLUDE (e.g. the train set, so test is disjoint).")
     ap.add_argument("--push-to-hub", default=None, help="Optional HF dataset repo id.")
     args = ap.parse_args()
     rng = random.Random(args.seed)
 
+    def _key(nums, target):
+        return (int(target), tuple(sorted(int(x) for x in nums)))
+
+    seen = set()  # dedup intra-set AND against --exclude-parquet (no train/test leakage)
+    if args.exclude_parquet:
+        import pandas as pd
+        ex = pd.read_parquet(args.exclude_parquet)
+        seen = {_key(n, t) for n, t in zip(ex["nums"], ex["target"])}
+        print(f"[gen-hard] excluding {len(seen)} problems from {args.exclude_parquet}")
+
     rows = []
     for n in args.difficulties:
         made, tries = 0, 0
-        while made < args.n_per_difficulty and tries < args.n_per_difficulty * 200:
+        while made < args.n_per_difficulty and tries < args.n_per_difficulty * 400:
             tries += 1
             p = generate_problem(n, rng, args.num_range)
             if p is None:
                 continue
+            k = _key(p[0], p[1])
+            if k in seen:
+                continue
             try:
                 rows.append(build_row(*p))
+                seen.add(k)
                 made += 1
             except AssertionError:
                 continue

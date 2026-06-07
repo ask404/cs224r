@@ -42,6 +42,9 @@ def parse_args():
     p.add_argument("--dataset", default="asingh15/countdown_tasks_3to4")
     p.add_argument("--from-parquet", default=None,
                    help="Read prompts from a local/volume parquet (prompt,target,nums) instead of --dataset.")
+    p.add_argument("--n-col", default=None,
+                   help="With --from-parquet: per-prompt sample count from this column (online reallocation). "
+                        "Prompts with 0 are skipped; prompt_idx is carried through if present.")
     p.add_argument("--split", default="train")
     p.add_argument("--out", required=True)
     p.add_argument("--max-num-prompts", type=int, default=200)
@@ -63,11 +66,18 @@ def main():
     tok_name = args.tokenizer or args.model
     tokenizer = AutoTokenizer.from_pretrained(tok_name)
 
+    n_list = None
     if args.from_parquet:
-        df = pd.read_parquet(args.from_parquet).iloc[: args.max_num_prompts]
+        df = pd.read_parquet(args.from_parquet)
+        if args.n_col:  # online reallocation: per-prompt sample count, skip 0
+            df = df[df[args.n_col].fillna(0).astype(int) > 0].reset_index(drop=True)
+        df = df.iloc[: args.max_num_prompts]
         prompts = list(df["prompt"])
         targets = list(df["target"])
         nums = list(df["nums"])
+        pidx = list(df["prompt_idx"]) if "prompt_idx" in df.columns else list(range(len(prompts)))
+        if args.n_col:
+            n_list = [max(1, int(x)) for x in df[args.n_col]]
     else:
         ds = load_dataset(args.dataset, split=args.split)
         ds = ds.select(range(min(args.max_num_prompts, len(ds))))
@@ -75,6 +85,7 @@ def main():
         # Countdown eval schema: target + nums. Fall back to ground_truth if present.
         targets = list(ds["target"]) if "target" in ds.column_names else [g["target"] for g in ds["ground_truth"]]
         nums = list(ds["nums"]) if "nums" in ds.column_names else [g["numbers"] for g in ds["ground_truth"]]
+        pidx = list(range(len(prompts)))
 
     llm = LLM(
         model=args.model,
@@ -83,18 +94,16 @@ def main():
         max_num_seqs=args.max_num_seqs,
         seed=args.seed,
     )
-    sampling = SamplingParams(
-        n=args.samples_per_prompt,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        top_k=args.top_k,
-        min_p=args.min_p,
-        max_tokens=args.max_tokens,
-        stop=["</answer>"],
-        include_stop_str_in_output=True,
-    )
 
-    print(f"[gen] {len(prompts)} prompts x {args.samples_per_prompt} samples from {args.model}", flush=True)
+    def _sp(n):
+        return SamplingParams(n=n, temperature=args.temperature, top_p=args.top_p, top_k=args.top_k,
+                              min_p=args.min_p, max_tokens=args.max_tokens, stop=["</answer>"],
+                              include_stop_str_in_output=True)
+
+    # vLLM accepts a per-prompt list of SamplingParams -> variable sample count in one call.
+    sampling = [_sp(n) for n in n_list] if n_list is not None else _sp(args.samples_per_prompt)
+    desc = "variable" if n_list is not None else args.samples_per_prompt
+    print(f"[gen] {len(prompts)} prompts x {desc} samples from {args.model}", flush=True)
     outputs = llm.generate(prompts, sampling)
 
     rows = []
@@ -106,7 +115,7 @@ def main():
             input_ids, label_positions = make_label_positions(prompt_token_ids, output_token_ids)
             finish_reason = getattr(o, "finish_reason", None)
             rows.append({
-                "prompt_idx": i,
+                "prompt_idx": int(pidx[i]),
                 "prompt": prompts[i],
                 "target": gt["target"],
                 "nums": gt["numbers"],
