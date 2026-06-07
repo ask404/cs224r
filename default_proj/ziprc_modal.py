@@ -365,7 +365,7 @@ def _build_pipeline(name: str):
                                      "--scheme", "frontier", "--num-prompts", "120", "--max-new-tokens", "512",
                                      "--budgets", "3", "4", "6", "8",
                                      "--prune-thresholds", "0.3", "0.4", "0.5", "0.6", "0.7",
-                                     "--seeds", "0", "1", "2", "--out", f"{D}/blend_hard_sweep.parquet"]],
+                                     "--seeds", "0", "1", "2", "--out", f"{D}/blend_hard_sweep.parquet", "--out-tier", f"{D}/blend_hard_tier.parquet"]],
         ]
 
     if name == "blend_main":
@@ -380,7 +380,7 @@ def _build_pipeline(name: str):
                                      "--budgets", "3", "4", "6", "8",
                                      "--prune-thresholds", "0.3", "0.4", "0.5", "0.6", "0.7",
                                      "--seeds", "0", "1", "2", "3", "4", "5",
-                                     "--out", f"{D}/blend_main_sweep.parquet"]],
+                                     "--out", f"{D}/blend_main_sweep.parquet", "--out-tier", f"{D}/blend_main_tier.parquet"]],
         ]
 
     if name == "blend_holdout":
@@ -398,7 +398,7 @@ def _build_pipeline(name: str):
                                      "--num-prompts", "300", "--max-new-tokens", "512",
                                      "--budgets", "3", "4", "6", "8",
                                      "--prune-thresholds", "0.3", "0.4", "0.5", "0.6", "0.7",
-                                     "--seeds", "0", "1", "--out", f"{D}/blend_holdout_sweep.parquet"]],
+                                     "--seeds", "0", "1", "--out", f"{D}/blend_holdout_sweep.parquet", "--out-tier", f"{D}/blend_holdout_tier.parquet"]],
         ]
     raise ValueError(f"unknown pipeline: {name}")
 

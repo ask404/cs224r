@@ -120,6 +120,7 @@ def main():
                     help="If set, repeat the whole online run at each seed and report mean±std "
                          "+ per-seed Pareto-dominance count (firms up small-n pools).")
     ap.add_argument("--out", default=None, help="Threshold-sweep summary parquet.")
+    ap.add_argument("--out-tier", default=None, help="Per-tier calibration-gradient parquet.")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -152,9 +153,10 @@ def main():
     def gen_pools(seed):
         """Generate the pool_k-sample pool ONCE per prompt for this seed (the only GPU cost).
         Budgets and thresholds are then swept offline by re-selecting/re-pruning these pools."""
-        pools, promise, solved, diag = [], [], [], []
+        pools, promise, solved, diag, tiers = [], [], [], [], []
         for idx, r in enumerate(df.itertuples(index=False)):
             gt = {"target": int(r.target), "numbers": [int(x) for x in r.nums]}
+            tier = len(list(r.nums))                          # operand count = difficulty tier
             torch.manual_seed(seed * 100003 + int(getattr(r, "prompt_idx", idx)))
             o = dec.decode_prompt(r.prompt, args.pool_k, args.max_new_tokens, args.temperature,
                                   args.top_p, args.top_k, policy="none",
@@ -167,13 +169,14 @@ def main():
                 corr = compute_score(s["text"], gt) == 1.0
                 pool.append({"vhist": vh, "n_tokens": s["n_tokens"], "correct": corr, "q25": q25})
                 reached = s["n_tokens"] > args.warmup
-                diag.append({"reached": reached, "correct": corr,
+                diag.append({"reached": reached, "correct": corr, "tier": tier,
                              "mid": _smooth(vh[: args.warmup + 1], args.smooth_w) if reached else float("nan")})
             pools.append(pool)
+            tiers.append(tier)
             probe = pool[: args.probe_k]
             promise.append(float(np.mean([p["q25"] for p in probe])) if probe else 0.0)
             solved.append(bool(any(p["correct"] for p in probe)))
-        return pools, promise, np.asarray(solved), diag
+        return pools, promise, np.asarray(solved), diag, tiers
 
     def eval_budget(pools, promise, solved, budget):
         """Offline: allocate at `budget`, then fill the (tau x arm x prune) grid."""
@@ -198,8 +201,11 @@ def main():
 
     seeds = args.seeds if args.seeds else [args.seed]
     runs = []
+    stash = None
     for si, sd in enumerate(seeds):
-        pools, promise, solved, diag = gen_pools(sd)
+        pools, promise, solved, diag, tiers = gen_pools(sd)
+        if stash is None:
+            stash = (pools, promise, solved, tiers)           # seed-0 pools for per-tier 2x2
         rb = {"diag": diag, "solved": int(solved.sum())}
         for b in budgets:
             rb[b] = eval_budget(pools, promise, solved, b)
@@ -227,6 +233,37 @@ def main():
         recoverable = float(np.mean((win_mid >= 0.3) & (win_mid < 0.5)))
         print(f"  >>> of winners at risk at tau=0.5, {recoverable * 100:.0f}% are RECOVERABLE by tau=0.4 "
               f"(borderline 0.3-0.5) -> predicts whether the blend reaches Pareto-dominance")
+
+    # --- PER-TIER calibration law: each operand-count tier is a different calibration level, so
+    # one pool yields a CALIBRATION GRADIENT. For each tier: mid-AUC (separability) vs the blend's
+    # best Pareto compute-saving at >= that tier's baseline oracle. Predicts the free lunch tier-wise.
+    tier_rows = []
+    present = sorted(set(d["tier"] for d in alld))
+    if len(present) > 1:
+        pools0, promise0, solved0, tiers0 = stash
+        prim = args.budget
+        ne0 = allocate(promise0, solved0, prim, args.probe_k, args.kmax, args.scheme)
+        Ki0 = args.probe_k + ne0.astype(int)
+        Kf0 = int(round(Ki0.mean()))
+        print(f"\n=== PER-TIER CALIBRATION GRADIENT (budget={prim:g}, seed-0 pools) ===")
+        print(f"  {'tier':<6} {'n':>4} {'mid-AUC':>8} {'base-orc':>9} {'blend Pareto-save':>18}")
+        for t in present:
+            dt = [d for d in alld if d["tier"] == t and d["reached"]]
+            tauc = _auc([d["correct"] for d in dt], [d["mid"] for d in dt]) if dt else float("nan")
+            idxs = [j for j in range(len(tiers0)) if tiers0[j] == t]
+            ff_o = float(np.mean([any(s["correct"] for s in pools0[j][:Kf0]) for j in idxs]))
+            ff_c = float(np.mean([sum(s["n_tokens"] for s in pools0[j][:Kf0]) for j in idxs]))
+            best = 0.0
+            for thr in args.prune_thresholds:
+                ap = [sim(pools0[j][: int(Ki0[j])], True, args.warmup, args.prune_interval,
+                          args.keep_min, args.smooth_w, thr) for j in idxs]
+                ap_o = float(np.mean([s for _, s in ap]))
+                ap_c = float(np.mean([c for c, _ in ap]))
+                if ap_o >= ff_o - 1e-9 and ap_c < ff_c:
+                    best = max(best, (1 - ap_c / ff_c) * 100)
+            print(f"  {t:<6} {len(idxs):>4} {tauc:8.3f} {ff_o:9.3f} {best:+17.0f}%")
+            tier_rows.append({"tier": t, "n": len(idxs), "mid_auc": tauc,
+                              "base_oracle": ff_o, "pareto_saving_pct": best})
 
     def agg(b, thr, a, p, field):
         v = [r[b][(thr, a, p, field)] for r in runs]
@@ -259,6 +296,7 @@ def main():
                 best = {"B": b, "tau": thr, "adapt_prune_orc": ap_o, "adapt_prune_cost": ap_c,
                         "fixed_full_orc": bf_o, "fixed_full_cost": bf_c, "pareto_seeds": ndom}
             summary.append({"budget": b, "tau": thr, "n_seeds": len(seeds), "n_prompts": len(df),
+                            "mid_auc": mid_auc,
                             "fixed_full_orc": bf_o, "fixed_full_cost": bf_c,
                             "fixed_prune_orc": fp_o, "fixed_prune_cost": fp_c,
                             "adapt_full_orc": af_o, "adapt_full_cost": af_c,
@@ -275,6 +313,9 @@ def main():
     if args.out:
         pd.DataFrame(summary).to_parquet(args.out, index=False)
         print(f"\n[blend] wrote frontier grid -> {args.out}")
+    if args.out_tier and tier_rows:
+        pd.DataFrame(tier_rows).to_parquet(args.out_tier, index=False)
+        print(f"[blend] wrote per-tier gradient -> {args.out_tier}")
 
 
 if __name__ == "__main__":
