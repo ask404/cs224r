@@ -153,7 +153,7 @@ more accurate.* This is still enough for a unified controller (the levers cooper
 
 ---
 
-## 5. Result 3 — the calibration law (separability predicts the free lunch)
+## 5. Result 3 — the calibration law (separability predicts prune-safety)
 
 This is the heart of the study. Define **mid-trajectory separability** = the AUC of the head's
 smoothed value *at the prune decision point* as a predictor of the sample's *final* correctness.
