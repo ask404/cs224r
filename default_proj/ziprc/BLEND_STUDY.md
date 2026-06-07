@@ -3,8 +3,10 @@
 *A study of blending zero-overhead ZIP-RC-Lite introspection into a unified test-time controller:
 when do the levers compound, when do they fight, and what single quantity governs it all.*
 
-> Status: living document. Tables marked **[… pending]** are filled from the leakage-audited,
-> prompt-bootstrapped runs (`blend_eval.py` → `blend_stats.py` → `law_combine.py`).
+> Status: **complete** — all four pools (main n=50, holdout n=300 head-clean, hard n=120, hard-OOD-head
+> n=120) analyzed with prompt-level bootstrap inference, held-out operating-point selection, and a
+> difficulty-controlled partial correlation. Pipeline: `blend_eval.py` → `blend_stats.py` →
+> `law_combine.py`; figure `make_blend_figures.py`. Leakage- and faithfulness-audited (both clean).
 
 ---
 
@@ -20,18 +22,27 @@ partial correlation** (an adversarial-audit-driven rigor layer). What survives:
    saves ≥ the product of the two levers (up to **+16pp beyond product**), because **prune is more
    effective under adaptive allocation** (it concentrates samples on hard prompts, which carry the
    most losers to cut). "Allocation-agnostic" is *rejected* — there is a real positive interaction.
-2. **A single quantity governs prune-safety:** the head's *mid-trajectory* winner/loser separability
-   (AUC of the value *at the prune point*, **~0.6–0.7 — far below the 0.91 value-*end* AUC**). The
-   law survives a difficulty-controlled partial correlation (**partial r≈0.7, p≈0.03**; difficulty
-   is a *suppressor*, not the confound).
-3. **That separability is set by the problem, not the head.** A head-swap that lowered calibration
-   at *fixed* difficulty did **not** change prune-safety — hard Countdown is mid-unpredictable for
-   *every* head. The unlock is intrinsic problem structure, not more head training.
+2. **Pruning acts where the head is *least* sure.** The separability that matters is the value AUC
+   *at the prune point* (**~0.6–0.7, far below the 0.91 value-*end* AUC**) — so even calibrated
+   pools pay some accuracy for pruning. *Within* every pool, the higher-separability difficulty tier
+   prunes more safely (consistent in both calibrated pools).
+3. **But "separability predicts prune-safety" is a weak, noisy law across pools — not a clean one**
+   (difficulty-controlled partial r≈0.35, p≈0.36 over 3 *independent* pools; prune-safety also
+   scales with how much oracle is at risk). An earlier 3-pool p≈0.03 did **not** survive adding the
+   best-powered pool and dropping a non-independent one — the rigor caught my own optimism. And a
+   head-swap that lowered separability at *fixed* difficulty did **not** change prune-safety: the
+   ceiling is the **problem's** intrinsic mid-predictability, not the head's training.
 
-Net: where separability is adequate, the blend buys a **robust ~20–25% compute saving at neutral
-accuracy** — a real efficiency gain, *not* a free lunch. The optimistic single-run "Pareto win +
-accuracy synergy" shrank, under proper inference, to this honest result. **Calibration is the
-currency of the test-time compute economy — and the problem, more than the model, sets the price.**
+Net: the blend buys a **robust ~20–25% compute saving at neutral accuracy** (held-out, all pools) —
+a real efficiency gain, *not* a free lunch, and *not* an accuracy synergy (that single-run claim
+didn't survive). The honest headline: **adaptive-K + prune compound into a reliable compute
+discount; how safely you can prune is governed by mid-trajectory separability — which the *problem*,
+more than the model, sets — but as a tendency, not yet a clean predictive law.**
+
+![blend study](figures/blend_study.png)
+*(A) The blend frontier (squares) dominates fixed+full (circles) on both calibrated pools; on hard
+the head-swap frontiers overlap (same samples). (B) The calibration law is a weak cross-pool
+tendency (partial r=+0.35) — real within each pool, noisy across them.*
 
 ---
 
@@ -119,10 +130,11 @@ At the reference operating point (B=6, τ=0.5):
 | pool | blend save | product-pred | **gap** [95% CI] | prune keeps (fixed→adapt) | **alloc-agnostic** diff [CI] |
 |---|---|---|---|---|---|
 | main (calibrated) | 28% | 12% | **+16pp** [+9,+23] | 72%→58% | **+13pp** [+9,+16] |
+| holdout (calib, n=300) | 26% | 8% | **+19pp** [+16,+21] | 70%→56% | **+14pp** [+13,+16] |
 | hard | 47% | 44% | **+3pp** [+1.7,+4.3] | 52%→49% | **+3pp** [+1.7,+3.9] |
 | hard (OOD head) | 46% | 42% | **+4pp** [+3,+5.3] | 55%→51% | **+4pp** [+3,+4.9] |
 
-*(holdout n=300 pending.)* Two robust conclusions: (a) the blend's saving is **≥ the product**
+Two robust conclusions (every gap/diff CI is strictly **> 0**): (a) the blend's saving is **≥ the product**
 everywhere (the gap CI is strictly **> 0**) — so the levers *at least* compound, and on the
 calibrated pool they **super-compound** (+16pp beyond product); (b) **"allocation-agnostic" is
 rejected** — prune cuts a *larger* fraction under adaptive allocation (e.g. 42% vs 28% on main),
@@ -140,16 +152,19 @@ allocation lift collapses under pruning. The rigorous test is a difference-in-di
 | pool | DiD (oracle) | 95% CI |
 |---|---|---|
 | main (calibrated) | +0.007 | [−0.037, +0.047] |
+| holdout (calib, n=300) | +0.015 | [−0.002, +0.032] |
 | hard | +0.017 | [−0.008, +0.044] |
 | hard (OOD head) | +0.017 | [−0.000, +0.036] |
 
-*(holdout n=300 pending — best-powered.)* All three lean **positive** (the lift does *not* collapse
-under prune — the levers don't fight), but **every CI includes 0** — so we **cannot** claim
-allocation makes pruning more *accurate*. The earlier single-run "+0.10 lift / +0.033 synergy" was
-**small-n noise**, and the rigorous analysis honestly retracts it. The synergy that *is* significant
-is on the **compute axis** (Result 1: prune cuts more under adaptive). So the defensible statement
-is: *allocation makes pruning cheaper-per-cut (significant) and at worst accuracy-neutral — not
-more accurate.* This is still enough for a unified controller (the levers cooperate, not cancel).
+**All four pools lean positive** (the lift does *not* collapse under prune — the levers don't
+fight), and the best-powered pool (holdout, n=300) is +0.015 **[−0.002, +0.032]** — right on the
+cusp. But **every CI includes 0**, so we **cannot** individually claim allocation makes pruning more
+*accurate*. The earlier single-run "+0.10 lift / +0.033 synergy" was **small-n noise**, and the
+rigorous analysis honestly retracts it (the 4/4-positive consistency is suggestive, but we stop short
+of asserting significance). The synergy that *is* significant is on the **compute axis** (Result 1:
+prune cuts more under adaptive). Defensible statement: *allocation makes pruning cheaper-per-cut
+(significant) and at worst accuracy-neutral — not more accurate.* Still enough for a unified
+controller: the levers cooperate, not cancel.
 
 ---
 
@@ -166,22 +181,26 @@ the law **against its confound** — a **partial correlation controlling base-or
 with a **permutation p-value**. The law is only real if separability predicts prune-safety *beyond*
 the difficulty gradient.
 
-**Result (n=9 points: 3 pool + 6 tier; holdout pending):**
+**Result (3 independent pools — main n=50, holdout n=300, hard n=120 — 9 points):**
 
-| | mid-AUC @ prune point | signed prune-hit @τ=0.5 | base-oracle |
+| pool | tier 3 (mid-AUC → hit) | tier 4 (mid-AUC → hit) | within-pool? |
 |---|---|---|---|
-| main, tier 3 | 0.647 | **−0.028** | 0.951 |
-| main, tier 4 | 0.585 | −0.122 | 0.506 |
-| main, pool | 0.701 | −0.077 | 0.720 |
-| hard, tier 3/4 | 0.63 | −0.125 | 0.90 / 0.51 |
-| hard, pool | 0.819\* | −0.067 | 0.375 |
+| main (calib) | 0.647 → **−0.028** | 0.585 → **−0.122** | ✅ higher-AUC tier safer |
+| holdout (calib, n=300) | 0.691 → **−0.017** | 0.554 → **−0.059** | ✅ higher-AUC tier safer |
+| hard | 0.629 → −0.125 | 0.634 → −0.125 | — (no AUC gradient) |
 
-\*pool-level AUC is **Simpson-inflated** by tier spread — the per-tier ~0.63 is the clean reading.
-Combined: raw Pearson r=+0.62, and the **partial correlation controlling base-oracle is r=+0.71,
-permutation p=0.032** — the law **survives difficulty control**. Crucially, *controlling difficulty
-strengthens it* (partial 0.71 > raw 0.62; base-oracle↔hit r=+0.05), so difficulty is a
-**suppressor, not the confound** the audit feared. The relationship is steep near the threshold:
-mid-AUC ≈0.65 → hit ≈−0.03 (prune ~safe); mid-AUC ≤0.6 → hit ≈−0.12 (prune costly).
+**The honest result has two parts.** (1) *Within* each pool that has a real separability gradient
+(both calibrated pools), the higher-mid-AUC difficulty tier prunes **markedly safer** — a clean,
+paired, same-head/same-generation comparison, consistent **2/2**. (2) But the *cross-pool* law — one
+correlation of mid-AUC → prune-hit — is **weak and not significant**: difficulty-controlled
+**partial r=+0.35, permutation p=0.36** (n=9). Prune-safety also scales with *how much oracle is at
+risk* (you can't lose what you can't solve), which the linear control doesn't fully remove.
+
+> **The rigor caught my own optimism.** An earlier combine over {main, hard, *cross*} gave partial
+> r=0.71, p=0.03 — but `cross` is the *same prompts* as `hard` (not independent), and the
+> best-powered pool (holdout) had not yet landed. Using the 3 *independent* pools collapses it to
+> p=0.36. The mechanism is real (within-pool); the clean cross-pool **law is not established at this
+> scale.**
 
 **The causal decoupler — same difficulty, different calibration.** The partial correlation controls
 difficulty *statistically*; the `blend_cross` run controls it *by construction*. Because the value
@@ -204,10 +223,11 @@ chosen on a *disjoint half* of prompts and reported on the other (prompt-bootstr
 | pool | held-out compute saving | held-out oracle-delta |
 |---|---|---|
 | main (calibrated) | **+21%** | +0.007 [fold −0.013, +0.027] |
+| holdout (calib, n=300) | **+23%** | +0.007 [fold −0.003, +0.017] |
 | hard | **+24%** | −0.017 [−0.044, +0.006] |
 | hard (OOD head) | **+24%** | −0.011 [−0.033, +0.011] |
 
-*(holdout pending.)* The blend reliably buys **~21–24% compute** at an oracle-delta whose CI
+The blend reliably buys **~21–24% compute** at an oracle-delta whose CI
 **straddles 0** — i.e. **neutral accuracy**, not the clear Pareto win the optimistic single-run
 suggested. That single-run "+0.02 oracle gain at −22% compute" was **winner's-curse** from picking
 the best of a 4×5 grid on its own data; held-out selection corrects it to an honest, still-valuable
