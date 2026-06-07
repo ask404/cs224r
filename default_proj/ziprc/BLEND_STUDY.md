@@ -66,31 +66,57 @@ the samples a policy actually runs. `oracle` = any selected-and-surviving sample
   head-disjointness is the requirement.
 - **Tie-corrected AUC:** the separability metric uses average-rank Mann-Whitney AUC (a bug where
   all-equal scores returned 0.75 instead of 0.5 was caught and fixed; unit-tested).
+- **Independent adversarial audits (3).** A leakage audit *empirically verified* (pulling the
+  actual HF splits) that `test ∩ train[0:512] = 0/50`, the holdout dedup excludes every
+  head-training problem, `value_q25` does not leak (the blend re-allocates online from its own
+  fresh probe), and the hard pool is train/test-disjoint — **no leakage found**. A faithfulness
+  audit *fuzzed* `sim()` against the live decoder over **220k cells with 0 mismatches** (and made
+  the live prune threshold a parameter, so every swept τ is deployable, not offline-only). A
+  statistics audit drove the rigor layer below.
+
+**Statistical rigor (the inference layer).** Generation is the only GPU cost, so we dump every
+sample's value trajectory once and do all inference offline (`blend_stats.py`):
+- **The prompt is the inference unit.** All CIs are **prompt-level paired bootstraps** (seeds are
+  averaged per prompt to cancel generation noise) — *not* seed-std, which only measures decoding
+  variance. CIs are scoped "on these prompts."
+- **Held-out operating point.** (budget, τ) is selected on one half of prompts and the blend's
+  saving + oracle-delta are *reported on the other half* (2-fold) — no winner's-curse from picking
+  the best of the 4×5 grid on its own data. The full grid is always printed.
+- **Matched-budget** comparison (blend at B vs fixed+full at the *same* B) — no cross-budget bug.
+- **Falsifiable forms with CIs:** compounding = (blend saving − product-of-levers) gap CI;
+  allocation-agnostic = (prune fraction under fixed − under adaptive) CI; synergy = oracle DiD CI.
+- **The law is tested against its confound:** a **partial correlation** of (separability, prune
+  accuracy-hit) controlling base-oracle (difficulty), with a **permutation p-value** — so the law
+  must beat the difficulty gradient, not merely coincide with it. The y-axis is the **signed** hit
+  (no 0-floor).
 
 ---
 
 ## 3. Result 1 — the compute savings COMPOUND
 
 The two levers act on different quantities — adaptive-K moves *oracle* at fixed samples, prune
-moves *cost* at fixed oracle — so a blend should multiply their savings. It does.
+moves *cost* at fixed oracle — so a blend should multiply their savings. Two falsifiable tests
+(prompt-bootstrap CIs):
 
-**[multi-seed]** *(pending: hard pool, 3 seeds, n=120)*
+- **Allocation-agnostic** (the testable core): prune keeps the *same* cost-fraction under fixed vs
+  adaptive allocation — `(fixed prune-fraction − adaptive prune-fraction)` CI should straddle 0.
+- **Compounding**: the blend's measured saving equals the product-of-levers prediction —
+  `(measured − product)` gap CI should straddle 0.
 
-- prune's token-saving is **allocation-agnostic** (≈ same fraction under fixed and adaptive
-  allocation), and
-- the blend's total compute cut ≈ the **product** of the two levers' individual cuts.
+**[CI pending]** *(filled from `blend_stats.py`, hard/main/holdout)*
 
 ---
 
 ## 4. Result 2 — the levers are SYNERGISTIC on accuracy (they do not fight)
 
 The naive fear (failure-mode #4): prune kills the very frontier samples adaptive-K paid for, so the
-allocation lift collapses under pruning. The data shows the **opposite**.
+allocation lift collapses under pruning. We test the **opposite** with a difference-in-differences:
+`[(adaptive − fixed) oracle | prune] − [(adaptive − fixed) oracle | full]`, prompt-bootstrap CI.
+If the CI is **> 0**, adaptive's lift *grows* under prune — allocation concentrates samples on hard
+prompts, leaving **more survivors** when prune culls losers, so **allocation makes pruning safer**.
+This is the key enabling result for a unified controller: the compute-axis levers cooperate.
 
-**[multi-seed]** *(pending)* — adaptive-K's oracle lift over fixed *grows* under prune, because
-allocation concentrates samples on hard prompts, leaving **more survivors** when prune culls
-losers. **Allocation makes pruning safer.** This is the key enabling result for a unified
-controller: the compute-axis levers cooperate rather than cancel.
+**[CI pending]**
 
 ---
 
@@ -100,22 +126,20 @@ This is the heart of the study. Define **mid-trajectory separability** = the AUC
 smoothed value *at the prune decision point* as a predictor of the sample's *final* correctness.
 It measures whether the head can tell winners from losers early enough for prune to act safely.
 
-**The law:** the blend's best **Pareto compute-saving at ≥ baseline oracle** rises with
-mid-trajectory separability. Where separability is high, prune's accuracy cost is *recoverable* by
-threshold tuning and the blend Pareto-dominates; where it is low, the lost winners are *confidently
-mis-rated* and no threshold recovers them — the blend is only a trade.
+**The law (signed, confound-controlled):** prune's **signed accuracy-hit** (oracle lost to a fixed
+aggressive τ; ≤ 0, closer to 0 = safer) rises toward 0 as mid-trajectory separability rises. We
+pool points across pools *and* per-difficulty-tier (one pool = a calibration gradient), then test
+the law **against its confound** — a **partial correlation controlling base-oracle** (difficulty)
+with a **permutation p-value**. The law is only real if separability predicts prune-safety *beyond*
+the difficulty gradient.
 
-**[multi-seed: pool-level points]** *(pending: main n=50 ×6, holdout n=300 ×2, hard n=120 ×3)*
+**[law table pending]** — pool points (main n=50, holdout n=300 head-clean, hard n=120) + per-tier
+gradient (hard tiers 3–6), each `(mid-AUC, signed prune-hit, base-oracle, n)`; combined Pearson,
+**partial r | base-oracle**, and permutation p reported by `law_combine.py`.
 
-| pool | head | mid-AUC | base oracle | blend Pareto-saving @ ≥ base | verdict |
-|---|---|---|---|---|---|
-| main-test | lite_binary_512 | … | … | … | … |
-| holdout (head-clean) | lite_binary_512 | … | … | … | … |
-| hard | lite_binary_hard | … | … | … | … |
-
-**[multi-seed: per-tier gradient]** *(pending: hard pool, operand-count tiers 3–6)* — one pool, four
-calibration levels: separability degrades with operand count, and the blend's Pareto-saving tracks
-it tier-by-tier. *(correlation reported by `analyze` step.)*
+**Downstream consequence — the held-out free lunch.** Where the law says prune is safe, the blend
+should Pareto-dominate. We report the blend's **held-out** saving + oracle-delta (operating point
+chosen on a disjoint half of prompts), with prompt-bootstrap CIs. **[pending]**
 
 **Why threshold-tuning is the tell.** On a calibrated pool the at-risk winners cluster at the
 *borderline* (mid-value 0.3–0.5), so a gentler τ spares them; on an OOD pool they sit *confidently
