@@ -1,0 +1,20 @@
+
+# Local secrets / credentials
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS cruft
+.DS_Store
+
+# Large local artifacts (never commit)
+.venv/
+downloaded_checkpoints/
+downloaded_eval_results/
+logs/
+*.safetensors
