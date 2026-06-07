@@ -94,7 +94,7 @@ class AdaptiveDecoder:
     @torch.inference_mode()
     def decode_prompt(self, prompt, K, max_new_tokens, temperature, top_p, top_k,
                       policy="none", warmup=128, prune_interval=32, keep_min=2,
-                      smooth_w=4, beta=0.0, stop_threshold=1.0):
+                      smooth_w=4, beta=0.0, stop_threshold=1.0, prune_threshold=0.5):
         tok, dev = self.tok, self.device
         enc = tok(prompt, return_tensors="pt", add_special_tokens=False).to(dev)
         Lp = enc.input_ids.shape[1]
@@ -151,7 +151,7 @@ class AdaptiveDecoder:
                 if len(act) > keep_min:
                     act.sort(key=lambda i: _smooth(vhist[i], smooth_w))
                     for i in act[:len(act) - keep_min]:
-                        if _smooth(vhist[i], smooth_w) < 0.5:  # only prune predicted-losers
+                        if _smooth(vhist[i], smooth_w) < prune_threshold:  # only prune predicted-losers
                             pruned[i] = True
 
             # ZIP-RC utility policy: keep sample j iff its marginal contribution to

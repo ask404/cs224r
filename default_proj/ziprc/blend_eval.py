@@ -33,65 +33,11 @@ _ROOT = str(Path(__file__).resolve().parents[1])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 from evaluation.countdown import compute_score  # noqa: E402
-from ziprc.adaptive_decode import AdaptiveDecoder, _smooth  # noqa: E402
+from ziprc.adaptive_decode import AdaptiveDecoder  # noqa: E402
 from ziprc.allocate_budget import allocate  # noqa: E402
+from ziprc.blend_core import _auc, _smooth, sim  # noqa: E402
 from ziprc.config import (DISTRIBUTION_TOKEN_ID, LENGTH_BINS_COUNTDOWN,  # noqa: E402
                           REWARD_VALUES_BINARY)
-
-
-def sim(sel, prune, warmup, interval, keep_min, w, thr):
-    """Replay decode_prompt's loop on pre-recorded trajectories for a selected sample subset.
-    sel: list of dicts {vhist:list, n_tokens:int(=len vhist), correct:bool}.
-    Returns (cost = active forward passes, solved = any surviving-correct)."""
-    K = len(sel)
-    if K == 0:
-        return 0, False
-    T = [s["n_tokens"] for s in sel]
-    vh = [s["vhist"] for s in sel]
-    if not prune:
-        return int(sum(T)), bool(any(s["correct"] for s in sel))
-    pruned = [False] * K
-    cost = 0
-    for step in range(max(T)):
-        act = [i for i in range(K) if step < T[i] and not pruned[i]]
-        if not act:
-            break
-        cost += len(act)                                   # one forward pass per active sample
-        if step >= warmup and step % interval == 0:
-            # decode-time prune candidates = active AND still generating (not on their done token)
-            elig = [i for i in act if step < T[i] - 1]
-            if len(elig) > keep_min:
-                sv = {i: _smooth(vh[i][: step + 1], w) for i in elig}
-                for i in sorted(elig, key=lambda j: sv[j])[: len(elig) - keep_min]:
-                    if sv[i] < thr:                        # only abandon predicted-losers
-                        pruned[i] = True
-    solved = any((not pruned[i]) and sel[i]["correct"] for i in range(K))
-    return int(cost), bool(solved)
-
-
-def _auc(labels, scores):
-    """ROC-AUC of `scores` as a ranker of binary `labels` (Mann-Whitney form, **tie-corrected**
-    with average ranks so all-equal scores give exactly 0.5). NaN scores are dropped."""
-    lab = np.asarray(labels, float)
-    sc = np.asarray(scores, float)
-    m = ~np.isnan(sc)
-    lab, sc = lab[m], sc[m]
-    npos, nneg = lab.sum(), (1 - lab).sum()
-    if npos == 0 or nneg == 0:
-        return float("nan")
-    order = np.argsort(sc, kind="mergesort")
-    sc_s = sc[order]
-    ranks_s = np.empty(len(sc), float)        # 1-based AVERAGE ranks within tie-groups
-    i = 0
-    while i < len(sc):
-        j = i
-        while j + 1 < len(sc) and sc_s[j + 1] == sc_s[i]:
-            j += 1
-        ranks_s[i:j + 1] = (i + j) / 2.0 + 1.0
-        i = j + 1
-    rank = np.empty(len(sc), float)
-    rank[order] = ranks_s
-    return float((rank[lab == 1].sum() - npos * (npos + 1) / 2) / (npos * nneg))
 
 
 def main():
@@ -121,6 +67,9 @@ def main():
                          "+ per-seed Pareto-dominance count (firms up small-n pools).")
     ap.add_argument("--out", default=None, help="Threshold-sweep summary parquet.")
     ap.add_argument("--out-tier", default=None, help="Per-tier calibration-gradient parquet.")
+    ap.add_argument("--dump-samples", default=None,
+                    help="Raw per-sample parquet (seed,prompt_idx,tier,n_tokens,correct,q25,vhist) "
+                         "-> enables fully-offline rigorous stats (prompt bootstrap, held-out tau).")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -149,6 +98,7 @@ def main():
         df = df.iloc[: args.num_prompts].reset_index(drop=True)
 
     budgets = args.budgets if args.budgets else [args.budget]
+    dump_rows = []  # raw per-sample dump -> enables ALL rigorous stats OFFLINE (prompt-level bootstrap etc.)
 
     def gen_pools(seed):
         """Generate the pool_k-sample pool ONCE per prompt for this seed (the only GPU cost).
@@ -157,13 +107,14 @@ def main():
         for idx, r in enumerate(df.itertuples(index=False)):
             gt = {"target": int(r.target), "numbers": [int(x) for x in r.nums]}
             tier = len(list(r.nums))                          # operand count = difficulty tier
-            torch.manual_seed(seed * 100003 + int(getattr(r, "prompt_idx", idx)))
+            pidx = int(getattr(r, "prompt_idx", idx))
+            torch.manual_seed(seed * 100003 + pidx)
             o = dec.decode_prompt(r.prompt, args.pool_k, args.max_new_tokens, args.temperature,
                                   args.top_p, args.top_k, policy="none",
                                   warmup=args.warmup, prune_interval=args.prune_interval,
                                   keep_min=args.keep_min, smooth_w=args.smooth_w)
             pool = []
-            for s in o["samples"]:
+            for si_, s in enumerate(o["samples"]):
                 vh = s["vhist"]
                 q25 = vh[len(vh) // 4] if vh else 0.0        # value 25% through the trajectory
                 corr = compute_score(s["text"], gt) == 1.0
@@ -171,6 +122,10 @@ def main():
                 reached = s["n_tokens"] > args.warmup
                 diag.append({"reached": reached, "correct": corr, "tier": tier,
                              "mid": _smooth(vh[: args.warmup + 1], args.smooth_w) if reached else float("nan")})
+                if args.dump_samples:
+                    dump_rows.append({"seed": int(seed), "prompt_idx": pidx, "sample": si_, "tier": tier,
+                                      "n_tokens": int(s["n_tokens"]), "correct": int(corr),
+                                      "q25": float(q25), "vhist": [float(v) for v in vh]})
             pools.append(pool)
             tiers.append(tier)
             probe = pool[: args.probe_k]
@@ -316,6 +271,10 @@ def main():
     if args.out_tier and tier_rows:
         pd.DataFrame(tier_rows).to_parquet(args.out_tier, index=False)
         print(f"[blend] wrote per-tier gradient -> {args.out_tier}")
+    if args.dump_samples and dump_rows:
+        pd.DataFrame(dump_rows).to_parquet(args.dump_samples, index=False)
+        print(f"[blend] wrote RAW per-sample dump ({len(dump_rows)} rows) -> {args.dump_samples}  "
+              f"(enables offline prompt-level bootstrap / held-out tau selection / partial correlation)")
 
 
 if __name__ == "__main__":

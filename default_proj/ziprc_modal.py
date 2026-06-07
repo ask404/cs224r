@@ -365,7 +365,10 @@ def _build_pipeline(name: str):
                                      "--scheme", "frontier", "--num-prompts", "120", "--max-new-tokens", "512",
                                      "--budgets", "3", "4", "6", "8",
                                      "--prune-thresholds", "0.3", "0.4", "0.5", "0.6", "0.7",
-                                     "--seeds", "0", "1", "2", "--out", f"{D}/blend_hard_sweep.parquet", "--out-tier", f"{D}/blend_hard_tier.parquet"]],
+                                     "--seeds", "0", "1", "2", "--out", f"{D}/blend_hard_sweep.parquet", "--out-tier", f"{D}/blend_hard_tier.parquet",
+                                     "--dump-samples", f"{D}/blend_hard_dump.parquet"]],
+            ["ziprc/blend_stats.py", ["--dump", f"{D}/blend_hard_dump.parquet", "--name", "hard",
+                                      "--out-law", f"{D}/law_hard.parquet"]],
         ]
 
     if name == "blend_main":
@@ -380,7 +383,10 @@ def _build_pipeline(name: str):
                                      "--budgets", "3", "4", "6", "8",
                                      "--prune-thresholds", "0.3", "0.4", "0.5", "0.6", "0.7",
                                      "--seeds", "0", "1", "2", "3", "4", "5",
-                                     "--out", f"{D}/blend_main_sweep.parquet", "--out-tier", f"{D}/blend_main_tier.parquet"]],
+                                     "--out", f"{D}/blend_main_sweep.parquet", "--out-tier", f"{D}/blend_main_tier.parquet",
+                                     "--dump-samples", f"{D}/blend_main_dump.parquet"]],
+            ["ziprc/blend_stats.py", ["--dump", f"{D}/blend_main_dump.parquet", "--name", "main",
+                                      "--out-law", f"{D}/law_main.parquet"]],
         ]
 
     if name == "blend_holdout":
@@ -398,7 +404,10 @@ def _build_pipeline(name: str):
                                      "--num-prompts", "300", "--max-new-tokens", "512",
                                      "--budgets", "3", "4", "6", "8",
                                      "--prune-thresholds", "0.3", "0.4", "0.5", "0.6", "0.7",
-                                     "--seeds", "0", "1", "--out", f"{D}/blend_holdout_sweep.parquet", "--out-tier", f"{D}/blend_holdout_tier.parquet"]],
+                                     "--seeds", "0", "1", "--out", f"{D}/blend_holdout_sweep.parquet", "--out-tier", f"{D}/blend_holdout_tier.parquet",
+                                     "--dump-samples", f"{D}/blend_holdout_dump.parquet"]],
+            ["ziprc/blend_stats.py", ["--dump", f"{D}/blend_holdout_dump.parquet", "--name", "holdout",
+                                      "--out-law", f"{D}/law_holdout.parquet"]],
         ]
     raise ValueError(f"unknown pipeline: {name}")
 
